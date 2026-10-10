@@ -35,6 +35,7 @@ jobs:
         run: |
           if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
       - name: Build
+        timeout-minutes: 60
         shell: pwsh
         run: |
           $a = @()
@@ -45,6 +46,21 @@ jobs:
             if ("${{ inputs.model }}" -ne "true") { $a += "-NoModel" }
           } else { $a += "-NoModel" }
           ./packaging/windows/build_windows.ps1 @a
+      - name: Luu nhat ky build vao nhanh build-logs
+        if: always()
+        shell: pwsh
+        run: |
+          $d = Join-Path $env:RUNNER_TEMP "logs"
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          foreach ($f in @("build_win/build.log", "build_win/selftest.json", "build_win/inno.log")) { if (Test-Path $f) { Copy-Item $f $d } }
+          Set-Location $d
+          git init -q -b build-logs
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          "run ${{ github.run_number }} - ${{ job.status }}" | Set-Content status.txt
+          git add -A
+          git commit -q -m "log run ${{ github.run_number }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" build-logs
       - name: Upload selftest
         if: always()
         uses: actions/upload-artifact@v4

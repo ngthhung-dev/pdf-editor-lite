@@ -18,7 +18,14 @@ $work   = Join-Path $root "build_win"
 $vendor = Join-Path $work "vendor"
 $dist   = Join-Path $work "dist\PDFEditorLite"
 New-Item -ItemType Directory -Force -Path $work, $vendor | Out-Null
-function Step($t) { Write-Host ""; Write-Host "=== $t ===" -ForegroundColor Cyan }
+$log = Join-Path $work "build.log"
+function Step($t) {
+    Write-Host ""; Write-Host "=== $t ===" -ForegroundColor Cyan
+    Add-Content -Path $log -Value "$(Get-Date -Format 'HH:mm:ss')  $t" -Encoding UTF8
+}
+function Note($t) { Write-Host "  $t"; Add-Content -Path $log -Value "            $t" -Encoding UTF8 }
+Set-Content -Path $log -Value "Build PDF Editor Lite - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -Encoding UTF8
+trap { Add-Content -Path $log -Value "LOI: $_" -Encoding UTF8; throw }
 function Get-File($url, $out) {
     if (Test-Path $out) { Write-Host "  da co: $out"; return }
     Write-Host "  tai: $url"
@@ -39,20 +46,23 @@ $vpy = "$venv\Scripts\python.exe"
 & $vpy -m pip install --upgrade pip | Out-Null
 & $vpy -m pip install -r (Join-Path $root "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Cai thu vien chinh that bai." }
+Note "thu vien chinh: OK"
 foreach ($pkg in @("pdf2docx", "python-pkcs11", "rapidocr", "onnxruntime", "pyinstaller")) {
     & $vpy -m pip install $pkg
     if ($LASTEXITCODE -ne 0) {
         if ($pkg -eq "pyinstaller") { throw "Khong cai duoc PyInstaller." }
-        Write-Warning "Khong cai duoc $pkg : chuc nang tuong ung se thieu trong bo cai."
-    }
+        Note "KHONG cai duoc $pkg : chuc nang tuong ung se thieu trong bo cai."
+    } else { Note "$pkg : OK" }
 }
 
 # ---------------------------------------------------------------- 2. Model tieng Viet cua RapidOCR
 Step "2/8  Model tieng Viet/Latin cua RapidOCR (tai san de may nguoi dung khong can mang)"
-Push-Location $root
-& $vpy -c "from litepdf import ocr; ocr.rapid_engine('latin', ''); print('  model latin: OK')"
-if ($LASTEXITCODE -ne 0) { Write-Warning "Chua tai duoc model latin: app se tu tai o lan dung dau tien (can mang)." }
-Pop-Location
+$warm = Start-Process -FilePath $vpy -ArgumentList "-c", "`"from litepdf import ocr; ocr.rapid_engine('latin', ''); print('model latin: OK')`"" -WorkingDirectory $root -PassThru -NoNewWindow
+if (-not $warm.WaitForExit(300000)) { $warm.Kill(); Note "Tai model latin qua 5 phut: bo qua (app se tu tai o lan dung dau)." }
+elseif ($warm.ExitCode -ne 0) { Note "Chua tai duoc model latin: app se tu tai o lan dung dau tien (can mang)." }
+else { Note "model latin: OK" }
+$latin = Get-ChildItem -Path "$venv\Lib\site-packages\rapidocr\models" -Filter "*latin*" -ErrorAction SilentlyContinue
+Note ("file model latin trong goi: " + ($latin | ForEach-Object { $_.Name }) -join ", ")
 
 # ---------------------------------------------------------------- 3. Du lieu Tesseract
 Step "3/8  Du lieu ngon ngu Tesseract (vie, eng, osd)"
@@ -67,6 +77,7 @@ Step "4/8  Dong goi app bang PyInstaller"
 if (Test-Path (Join-Path $work "dist")) { Remove-Item -Recurse -Force (Join-Path $work "dist") }
 & $vpy -m PyInstaller (Join-Path $root "packaging\PDFEditorLite.spec") --noconfirm --distpath (Join-Path $work "dist") --workpath (Join-Path $work "pyi")
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$dist\PDFEditorLite.exe")) { throw "PyInstaller that bai." }
+Note ("dung luong ban dong goi: " + [math]::Round((Get-ChildItem $dist -Recurse | Measure-Object Length -Sum).Sum / 1MB) + " MB")
 
 # ---------------------------------------------------------------- 5. Tu kiem tra ban dong goi
 Step "5/8  Tu kiem tra ban dong goi"
@@ -74,9 +85,11 @@ New-Item -ItemType Directory -Force -Path "$dist\resources" | Out-Null
 Copy-Item -Recurse -Force $tess "$dist\resources\tessdata"
 $st = Join-Path $work "selftest.json"
 if (Test-Path $st) { Remove-Item $st }
-$p = Start-Process -FilePath "$dist\PDFEditorLite.exe" -ArgumentList "--selftest", "`"$st`"" -PassThru -Wait
+$p = Start-Process -FilePath "$dist\PDFEditorLite.exe" -ArgumentList "--selftest", "`"$st`"" -PassThru
+if (-not $p.WaitForExit(300000)) { $p.Kill(); Note "Tu kiem tra chay qua 5 phut: da dung." }
 if (-not (Test-Path $st)) { throw "Ban dong goi khong chay duoc (khong tao ra selftest.json)." }
 Get-Content $st -Encoding UTF8 | Write-Host
+Add-Content -Path $log -Value (Get-Content $st -Raw -Encoding UTF8) -Encoding UTF8
 if ((Get-Content $st -Raw -Encoding UTF8) -match '"(pymupdf|pyhanko|fonts)": "LOI') { throw "Ban dong goi thieu thanh phan bat buoc (xem tren)." }
 Remove-Item -Recurse -Force "$dist\resources\tessdata"      # tessdata la thanh phan tuy chon, do bo cai chep vao
 
@@ -138,9 +151,11 @@ Step "8/8  Tao file cai bang Inno Setup"
 $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source }
 if (-not $iscc) { throw "Chua cai Inno Setup 6. Tai mien phi tai https://jrsoftware.org/isdl.php roi chay lai." }
-Write-Host "  tuy chon: $($defs -join ' ')"
-& $iscc @defs (Join-Path $PSScriptRoot "installer.iss")
-if ($LASTEXITCODE -ne 0) { throw "Inno Setup bao loi." }
+Note "tuy chon: $($defs -join ' ')"
+$isslog = Join-Path $work "inno.log"
+& $iscc @defs (Join-Path $PSScriptRoot "installer.iss") 2>&1 | Tee-Object -FilePath $isslog | Select-Object -Last 40
+if ($LASTEXITCODE -ne 0) { Add-Content -Path $log -Value (Get-Content $isslog -Tail 40 | Out-String) -Encoding UTF8; throw "Inno Setup bao loi." }
 Write-Host ""
 Write-Host "XONG. File cai nam trong: $(Join-Path $work 'output')" -ForegroundColor Green
+Get-ChildItem (Join-Path $work "output") | ForEach-Object { Note ("XONG: " + $_.Name + "  " + [math]::Round($_.Length / 1MB) + " MB") }
 Get-ChildItem (Join-Path $work "output") | Format-Table Name, @{n="MB"; e={[math]::Round($_.Length / 1MB)}}
