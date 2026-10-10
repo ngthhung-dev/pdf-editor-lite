@@ -28,9 +28,12 @@ Set-Content -Path $log -Value "Build PDF Editor Lite - $(Get-Date -Format 'yyyy-
 trap { Add-Content -Path $log -Value "LOI: $_" -Encoding UTF8; throw }
 function Get-File($url, $out) {
     if (Test-Path $out) { Write-Host "  da co: $out"; return }
-    Write-Host "  tai: $url"
-    Invoke-WebRequest -Uri $url -OutFile "$out.part" -UseBasicParsing
+    Note "tai: $url"
+    # curl.exe (co san trong Windows 10/11): theo chuyen huong, thu lai khi rot mang, co gioi han thoi gian de khong treo
+    & curl.exe -L --fail --silent --show-error --retry 3 --retry-delay 5 --connect-timeout 30 --max-time 1500 -o "$out.part" $url
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$out.part")) { throw "Khong tai duoc: $url (curl ma $LASTEXITCODE)" }
     Move-Item -Force "$out.part" $out
+    Note ("  xong: " + [math]::Round((Get-Item $out).Length / 1MB) + " MB")
 }
 
 # ---------------------------------------------------------------- 1. Python + thu vien
@@ -110,10 +113,11 @@ if ($hasRapid) { $defs += "/DWithRapid=1" }
 if (-not $NoLibreOffice) {
     $lo = Join-Path $vendor "LibreOffice.msi"
     if (-not (Test-Path $lo)) {
-        $idx = (Invoke-WebRequest -Uri "https://download.documentfoundation.org/libreoffice/stable/" -UseBasicParsing).Content
+        $idx = (& curl.exe -L --fail --silent --show-error --connect-timeout 30 --max-time 120 "https://download.documentfoundation.org/libreoffice/stable/") -join "`n"
         $vers = [regex]::Matches($idx, 'href="(\d+\.\d+\.\d+)/"') | ForEach-Object { [version]$_.Groups[1].Value } | Sort-Object
         if (-not $vers) { throw "Khong doc duoc danh sach phien ban LibreOffice." }
         $v = $vers[0].ToString()      # ban on dinh cu hon ("still") trong muc stable: it loi hon ban moi nhat
+        Note "LibreOffice phien ban $v"
         Get-File "https://download.documentfoundation.org/libreoffice/stable/$v/win/x86_64/LibreOffice_${v}_Win_x86-64.msi" $lo
     }
     $defs += "/DWithLO=1"
