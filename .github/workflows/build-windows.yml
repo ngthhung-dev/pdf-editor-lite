@@ -1,0 +1,68 @@
+name: Build Windows installer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      libreoffice:
+        description: "Kem LibreOffice (+~350 MB)"
+        type: boolean
+        default: true
+      ollama:
+        description: "Kem Ollama (AI dich chay tren may)"
+        type: boolean
+        default: true
+      model:
+        description: "Kem san model dich (+~3.3 GB; bo tich thi model duoc tai luc cai)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Build
+        shell: pwsh
+        run: |
+          $a = @()
+          # chay tu dong khi day ma len (push): kem LibreOffice + Ollama, model tai luc cai
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            if ("${{ inputs.libreoffice }}" -ne "true") { $a += "-NoLibreOffice" }
+            if ("${{ inputs.ollama }}" -ne "true") { $a += "-NoOllama" }
+            if ("${{ inputs.model }}" -ne "true") { $a += "-NoModel" }
+          } else { $a += "-NoModel" }
+          ./packaging/windows/build_windows.ps1 @a
+      - name: Upload selftest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest
+          path: build_win/selftest.json
+          if-no-files-found: ignore
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDF-Editor-Lite-Setup
+          path: build_win/output/*
+          compression-level: 0
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v1.0.0-build${{ github.run_number }}"
+          $files = Get-ChildItem build_win/output | Where-Object { $_.Length -lt 2GB } | ForEach-Object { $_.FullName }
+          gh release create $tag @files --repo "${{ github.repository }}" --title "PDF Editor Lite 1.0.0 (build ${{ github.run_number }})" --notes "Bo cai Windows tao tu dong. Tai file PDF-Editor-Lite-1.0.0-Setup.exe ve va chay."

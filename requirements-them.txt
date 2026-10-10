@@ -1,0 +1,3 @@
+# Phan mo rong (cai khong duoc thi app van chay, chi thieu dung chuc nang do)
+python-pkcs11
+pdf2docx

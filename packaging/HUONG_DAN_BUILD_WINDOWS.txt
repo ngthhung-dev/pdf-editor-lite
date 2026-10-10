@@ -1,0 +1,42 @@
+CACH BUILD BO CAI WINDOWS - PDF Editor Lite 1.0.0
+==================================================
+Bo cai phai duoc tao tren may Windows 64-bit (hoac may Windows cua GitHub). Chua duoc chay thu lan nao:
+lan build dau co the phat sinh loi, hay gui lai thong bao loi de sua.
+
+CACH 1 - BUILD TREN MAY WINDOWS CUA MINH
+  Can co truoc:
+    a) Python 3.10 - 3.13 ban 64-bit (python.org; khi cai tick "Add python.exe to PATH").
+    b) Inno Setup 6 (mien phi): https://jrsoftware.org/isdl.php
+    c) Mang Internet; o dia trong khoang 6 GB (12 GB neu kem ca model dich).
+    d) (Tuy chon) Ollama da cai san tren may build neu muon KEM SAN model dich trong bo cai.
+       Khong co thi bo cai van co muc Ollama, nhung model se duoc tai ve luc nguoi dung cai (can mang).
+  Lam:
+    Nhap dup  packaging\windows\BUILD_WINDOWS.bat   va cho (khoang 15-40 phut tuy mang).
+    File cai nam trong  build_win\output\PDF-Editor-Lite-1.0.0-Setup.exe
+    (neu kem model: co them cac file PDF-Editor-Lite-1.0.0-Setup-1.bin, -2.bin... PHAI de chung thu muc voi file .exe).
+  Tuy chon (go trong cua so lenh):
+    packaging\windows\BUILD_WINDOWS.bat -NoLibreOffice      khong kem LibreOffice
+    packaging\windows\BUILD_WINDOWS.bat -NoOllama           khong kem Ollama
+    packaging\windows\BUILD_WINDOWS.bat -NoModel            kem Ollama, model tai luc cai
+    packaging\windows\BUILD_WINDOWS.bat -Model qwen3:4b     doi model dich kem theo
+
+CACH 2 - BUILD TU DONG TREN GITHUB (khong can cai gi tren may)
+  1. Tao mot repo tren github.com, tai toan bo thu muc nay len (ke ca thu muc .github).
+  2. Vao tab Actions > "Build Windows installer" > Run workflow (chon cac o kem theo) > cho 20-40 phut.
+  3. Tai file cai o muc Artifacts cua lan chay do.
+  Luu y: repo rieng tu (private) cua tai khoan mien phi chi co 500 MB luu artifact; bo cai day du lon hon muc do,
+  nen dung repo cong khai (public) hoac bo tich bot thanh phan.
+
+BO CAI CHO NGUOI DUNG TICH CHON
+  - PDF Editor Lite (bat buoc)
+  - OCR Tesseract (tieng Viet, tieng Anh)
+  - OCR RapidOCR (anh chup / scan xau)
+  - LibreOffice (Word/Excel/PowerPoint -> PDF)
+  - Ollama + model dich (AI dich chay tren may)
+  - Loi tat Desktop; them vao danh sach "Open with" cua file .pdf
+  Chay lai bo cai de them/bot thanh phan. Du lieu nguoi dung (key, cai dat, bo nho dich) nam o
+  %APPDATA%\PDF Editor Lite va khong bi bo cai hay trinh go cai dat dong toi.
+
+KHONG KEM DUOC: driver USB token, chung thu goc tin cay, API key Gemini (xem GHI_CHU_DONG_GOI.txt).
+Windows 10/11 khong cho bo cai tu dat app lam trinh mo PDF mac dinh: nguoi dung chuot phai file .pdf >
+Open with > PDF Editor Lite > Always, hoac vao Settings > Apps > Default apps.

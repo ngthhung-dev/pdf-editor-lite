@@ -1,0 +1,1225 @@
+"""Mô hình tài liệu và khung xem/chỉnh sửa trang PDF."""
+from __future__ import annotations
+
+import bisect
+import math
+import os
+import shutil
+import tempfile
+from contextlib import contextmanager
+
+import pymupdf
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (QColor, QDesktopServices, QGuiApplication, QImage, QPainter, QPen, QPolygonF,
+                           QTransform)
+from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QInputDialog, QMenu, QMessageBox, QToolTip
+
+from . import tools
+from .icons import icon_for
+
+GAP = 14.0
+MARGIN = 16.0
+MAX_PIXELS = 16_000_000
+MOVABLE = {"Square", "Circle", "Stamp", "Text", "FreeText"}
+MARK_TOOLS = {"highlight", "underline", "strike"}
+DRAG_TOOLS = {"rect", "ellipse", "line", "arrow", "image", "erase", "sign"}
+ONE_SHOT = {"image", "sign", "text", "note"}
+
+
+def qcolor_to_rgb(c: QColor) -> tuple[float, float, float]:
+    return (c.redF(), c.greenF(), c.blueF())
+
+
+def _user_name() -> str:
+    try:
+        import getpass
+        return getpass.getuser()
+    except Exception:
+        return ""
+
+
+class DocModel(QObject):
+    """Tài liệu PDF giữ trong bộ nhớ, có hoàn tác/làm lại."""
+    changed = Signal(object, bool)  # (chỉ số trang hoặc None, cấu trúc trang thay đổi)
+    stateChanged = Signal()
+
+    def __init__(self, data: bytes, path: str | None = None, password: str | None = None,
+                 title: str | None = None, parent=None):
+        super().__init__(parent)
+        self.doc, self.encrypted = tools.open_pdf_bytes(data, password)
+        self.security = tools.security_info(data, password) if self.encrypted else {}
+        self.base_data: bytes | None = data  # đúng với nội dung trên đĩa khi chưa sửa
+        self.path = path
+        self.password = password if self.encrypted else None
+        self.title = title or (os.path.basename(path) if path else "Chưa đặt tên.pdf")
+        self.dirty = path is None
+        self.fonts_added = False
+        self.undo_stack: list[bytes] = []
+        self.redo_stack: list[bytes] = []
+
+    # -- truy cập
+    @property
+    def page_count(self) -> int:
+        return self.doc.page_count
+
+    def page(self, i: int, for_edit: bool = False):
+        return self.doc[i]
+
+    def _snapshot(self) -> bytes:
+        return self.doc.tobytes()
+
+    def _push(self, stack: list[bytes], snap: bytes) -> None:
+        stack.append(snap)
+        limit = 3 if len(snap) > 60_000_000 else 20
+        while len(stack) > limit or (len(stack) > 2 and sum(map(len, stack)) > 400_000_000):
+            stack.pop(0)
+
+    def _reopen(self, data: bytes) -> None:
+        try:
+            self.doc.close()
+        except Exception:
+            pass
+        self.doc = pymupdf.open(stream=data, filetype="pdf")
+
+    @contextmanager
+    def edit(self, page: int | None = None, structure: bool = False):
+        """Bọc một thao tác sửa: tự lưu điểm hoàn tác, lỗi thì trả tài liệu về như cũ."""
+        snap = self._snapshot()
+        try:
+            yield
+        except Exception:
+            self._reopen(snap)
+            self.changed.emit(None, True)
+            raise
+        if isinstance(page, int):
+            try:
+                tools.style_notes(self.doc[page])      # ghi chú vừa tạo/sửa: dùng biểu tượng bong bóng thay cho ô vuông mặc định
+            except Exception:
+                pass
+        self._push(self.undo_stack, snap)
+        self.redo_stack.clear()
+        self.dirty = True
+        self.changed.emit(page, structure)
+        self.stateChanged.emit()
+
+    def replace_document(self, data: bytes) -> None:
+        """Thay toàn bộ tài liệu (nén, OCR...) như một thao tác có thể hoàn tác."""
+        snap = self._snapshot()
+        self._reopen(data)
+        self._push(self.undo_stack, snap)
+        self.redo_stack.clear()
+        self.dirty = True
+        self.changed.emit(None, True)
+        self.stateChanged.emit()
+
+    def undo(self) -> bool:
+        if not self.undo_stack:
+            return False
+        self._push(self.redo_stack, self._snapshot())
+        self._reopen(self.undo_stack.pop())
+        self.dirty = True
+        self.changed.emit(None, True)
+        self.stateChanged.emit()
+        return True
+
+    def redo(self) -> bool:
+        if not self.redo_stack:
+            return False
+        self.undo_stack.append(self._snapshot())
+        self._reopen(self.redo_stack.pop())
+        self.dirty = True
+        self.changed.emit(None, True)
+        self.stateChanged.emit()
+        return True
+
+    def export_bytes(self) -> bytes:
+        """Bytes PDF hiện tại (không mã hoá). Chưa sửa gì thì trả đúng file gốc để giữ chữ ký số."""
+        if not self.dirty and self.base_data is not None and not self.encrypted:
+            return self.base_data
+        if self.fonts_added:
+            tools.finalize_fonts(self.doc)
+        return self.doc.tobytes(garbage=3, deflate=True)
+
+    def save(self, path: str) -> None:
+        if self.fonts_added:
+            tools.finalize_fonts(self.doc)
+        d = os.path.dirname(os.path.abspath(path))
+        try:      # ghi ra file tạm cạnh file đích rồi đổi tên: mất điện giữa chừng cũng không hỏng file cũ
+            fd, tmp = tempfile.mkstemp(suffix=".pdf", dir=d)
+            os.close(fd)
+            beside = True
+        except OSError:
+            # Thư mục đích không cho tạo file tạm (thư mục được Windows bảo vệ, ổ mạng, OneDrive...):
+            # ghi ra thư mục tạm của hệ thống rồi chép thẳng vào file đích.
+            fd, tmp = tempfile.mkstemp(suffix=".pdf")
+            os.close(fd)
+            beside = False
+        try:
+            if self.password:
+                tools.save_encrypted(self.doc, tmp, self.password, allow_edit=True)
+            else:
+                self.doc.save(tmp, garbage=3, deflate=True)
+            if beside:
+                os.replace(tmp, path)
+            else:
+                with open(tmp, "rb") as src, open(path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+        finally:
+            try:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+            except OSError:
+                pass
+        with open(path, "rb") as f:
+            self.base_data = f.read()
+        self.path = path
+        self.title = os.path.basename(path)
+        self.dirty = False
+        self.stateChanged.emit()
+
+    def close(self):
+        try:
+            self.doc.close()
+        except Exception:
+            pass
+
+
+class Viewer(QGraphicsView):
+    pageChanged = Signal(int)
+    zoomChanged = Signal(float)
+    message = Signal(str)
+    signRequested = Signal(int, object)  # trang, pymupdf.Rect
+    toolChanged = Signal(str)
+    selectionChanged = Signal()
+
+    def __init__(self, model: DocModel, parent=None):
+        super().__init__(parent)
+        self.model = model
+        self.setScene(QGraphicsScene(self))
+        self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
+        self.setTransformationAnchor(QGraphicsView.NoAnchor)
+        self.setResizeAnchor(QGraphicsView.NoAnchor)
+        self.setMouseTracking(True)
+        self.setFrameShape(QGraphicsView.NoFrame)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAcceptDrops(False)
+        self.bg = QColor("#dfe3e8")
+        self.base = self.logicalDpiX() / 72.0
+        self.zoom = 1.0
+        self.fit = None  # mở file ở đúng 100% kích thước trang
+        self.rects: list[QRectF] = []
+        self.tops: list[float] = []
+        self.cache: dict[int, tuple[float, QImage]] = {}
+        self.words: dict[int, list] = {}
+        self.imgs: dict[int, list] = {}
+        self.notes: dict[int, list] = {}     # ghi chú có nội dung trên từng trang (để hiện khi rê chuột)
+        self._note_tip = None
+        self.sel_image = None      # (trang, thông tin ảnh) khi đang chọn một hình ảnh gốc
+        self.dicts: dict[int, dict] = {}
+        self.tool = "hand"
+        self.payload = None
+        self.colors = {"mark": QColor("#ffe100"), "draw": QColor("#e02020"), "text": QColor("#000000")}
+        self.line_width = 1.5
+        self.font_size = 12.0
+        self._cur_page = 0
+        # trạng thái tương tác
+        self.press = None          # QPointF (scene)
+        self.press_page = None
+        self.cur = None
+        self.pan = None
+        self.ink: list[QPointF] = []
+        self.sel_page = None
+        self.sel_rects: list[pymupdf.Rect] = []
+        self.sel_text = ""
+        self.hits: list[tuple[int, pymupdf.Rect]] = []
+        self.hit_idx = -1
+        self.query = ""
+        self.annot = None          # (trang, xref, loại)
+        self.annot_rect = None     # pymupdf.Rect (đang hiển thị, kể cả khi kéo)
+        self.annot_mode = None     # 'move' | 'resize'
+        self.annot_off = None
+        self.annot_moved = False
+        self.drag_run = None
+        self.font_family = "arial"
+        self.hover_run = None
+        self._rerender = QTimer(self, singleShot=True, interval=140, timeout=self._do_rerender)
+        model.changed.connect(self._on_changed)
+        self.verticalScrollBar().valueChanged.connect(self._on_scroll)
+        self.layout_pages()
+
+    # ------------------------------------------------------------ bố cục
+    def layout_pages(self):
+        doc = self.model.doc
+        sizes = []
+        self.rot = []  # (góc xoay, ma trận hiển thị, ma trận ngược, khung trang chưa xoay)
+        for p in doc:
+            sizes.append((p.rect.width, p.rect.height))
+            ub = p.rect * p.derotation_matrix
+            ub.normalize()
+            self.rot.append((p.rotation, p.rotation_matrix, p.derotation_matrix, ub))
+        maxw = max((w for w, _ in sizes), default=595)
+        self.rects, self.tops = [], []
+        y = MARGIN
+        for w, h in sizes:
+            self.rects.append(QRectF((maxw - w) / 2 + MARGIN, y, w, h))
+            self.tops.append(y)
+            y += h + GAP
+        self.scene().setSceneRect(0, 0, maxw + 2 * MARGIN, max(y - GAP + MARGIN, 10))
+        self.cache.clear()
+        self.words.clear()
+        self.imgs.clear()
+        self.notes.clear()
+        self.dicts.clear()
+        self.viewport().update()
+
+    def _on_changed(self, page, structure):
+        if page == "toc":  # chỉ bookmark thay đổi, trang không đổi
+            return
+        self.sel_image = None
+        self.sel_rects, self.sel_text, self.hover_run = [], "", None
+        if structure or page is None:
+            self.annot = None
+            self.hits, self.hit_idx = [], -1
+            v = self.verticalScrollBar().value()
+            self.layout_pages()
+            self.apply_zoom()
+            self.verticalScrollBar().setValue(v)
+        else:
+            self.cache.pop(page, None)
+            self.words.pop(page, None)
+            self.imgs.pop(page, None)
+            self.notes.pop(page, None)
+            self.dicts.pop(page, None)
+            if page < len(self.rects):
+                r = self.model.doc[page].rect
+                if abs(r.width - self.rects[page].width()) > 0.5 or abs(r.height - self.rects[page].height()) > 0.5:
+                    self.layout_pages()
+        self.viewport().update()
+
+    # ------------------------------------------------------------ thu phóng
+    def apply_zoom(self):
+        if not self.rects:
+            return
+        vw = self.viewport().width() - 2
+        vh = self.viewport().height() - 2
+        sw = self.scene().sceneRect().width()
+        if self.fit == "width":
+            self.zoom = max(0.1, vw / (sw * self.base))
+        elif self.fit == "page":
+            r = self.rects[min(self._cur_page, len(self.rects) - 1)]
+            self.zoom = max(0.1, min(vw / ((r.width() + 2 * MARGIN) * self.base),
+                                     vh / ((r.height() + 2 * MARGIN) * self.base)))
+        self.zoom = min(max(self.zoom, 0.1), 6.0)
+        s = self.zoom * self.base
+        self.resetTransform()
+        self.scale(s, s)
+        self.zoomChanged.emit(self.zoom)
+        self.viewport().update()
+
+    def set_zoom(self, z: float, anchor: QPointF | None = None):
+        self.fit = None
+        vp = anchor if anchor is not None else QPointF(self.viewport().width() / 2, self.viewport().height() / 2)
+        before = self.mapToScene(vp.toPoint())
+        self.zoom = z
+        self.apply_zoom()
+        after = self.mapToScene(vp.toPoint())
+        d = (after - before) * self.transform().m11()
+        self.horizontalScrollBar().setValue(int(self.horizontalScrollBar().value() - d.x()))
+        self.verticalScrollBar().setValue(int(self.verticalScrollBar().value() - d.y()))
+
+    def set_fit(self, mode: str):
+        page = self._cur_page
+        self.fit = mode
+        self.apply_zoom()
+        if mode == "page":
+            self.goto_page(page)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if self.fit:
+            self.apply_zoom()
+
+    def wheelEvent(self, e):
+        if e.modifiers() & Qt.ControlModifier:
+            f = 1.15 if e.angleDelta().y() > 0 else 1 / 1.15
+            self.set_zoom(self.zoom * f, e.position())
+            e.accept()
+        else:
+            super().wheelEvent(e)
+
+    # ------------------------------------------------------------ điều hướng
+    def current_page(self) -> int:
+        return self._cur_page
+
+    def _on_scroll(self, *_):
+        if not self.rects:
+            return
+        y = self.mapToScene(0, int(self.viewport().height() * 0.35)).y()
+        i = max(0, min(bisect.bisect_right(self.tops, y) - 1, len(self.rects) - 1))
+        if i != self._cur_page:
+            self._cur_page = i
+            self.pageChanged.emit(i)
+
+    def goto_page(self, i: int, y: float = 0.0):
+        if not self.rects:
+            return
+        i = max(0, min(i, len(self.rects) - 1))
+        r = self.rects[i]
+        top = (r.top() + y - GAP / 2) * self.transform().m11()
+        self.verticalScrollBar().setValue(int(top))
+        if self._cur_page != i:
+            self._cur_page = i
+            self.pageChanged.emit(i)
+
+    def ensure_visible(self, page: int, rect: pymupdf.Rect):
+        sr = self.to_scene(page, rect)
+        vis = self.mapToScene(self.viewport().rect()).boundingRect()
+        if not vis.contains(sr):
+            self.centerOn(sr.center())
+
+    # ------------------------------------------------------------ toạ độ
+    def page_at(self, sp: QPointF, clamp: bool = True) -> int | None:
+        if not self.rects:
+            return None
+        i = max(0, min(bisect.bisect_right(self.tops, sp.y()) - 1, len(self.rects) - 1))
+        if not clamp and not self.rects[i].contains(sp):
+            return None
+        return i
+
+    def to_page(self, i: int, sp: QPointF, clamp: bool = True) -> pymupdf.Point:
+        r = self.rects[i]
+        x, y = sp.x() - r.left(), sp.y() - r.top()
+        if clamp:
+            x = min(max(x, 0.0), r.width())
+            y = min(max(y, 0.0), r.height())
+        p = pymupdf.Point(x, y)
+        return p * self.rot[i][2] if self.rot[i][0] else p
+
+    def to_display(self, i: int, pt) -> pymupdf.Point:
+        p = pymupdf.Point(pt)
+        return p * self.rot[i][1] if self.rot[i][0] else p
+
+    def to_scene(self, i: int, rect) -> QRectF:
+        """Khung trên trang (toạ độ trang chưa xoay, như PyMuPDF dùng) -> khung trên màn hình."""
+        r = self.rects[i]
+        rect = pymupdf.Rect(rect)
+        if self.rot[i][0]:
+            rect = rect * self.rot[i][1]
+            rect.normalize()
+        return QRectF(r.left() + rect.x0, r.top() + rect.y0, rect.width, rect.height)
+
+    # ------------------------------------------------------------ kết xuất
+    def _render(self, i: int, want: float) -> QImage:
+        page = self.model.doc[i]
+        r = page.rect
+        sc = min(want, math.sqrt(MAX_PIXELS / max(1.0, r.width * r.height)))
+        try:
+            tools.style_notes(page)      # ghi chú cũ của app (ô vuông thô) cũng được vẽ bằng biểu tượng mới
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(sc, sc), alpha=False, annots=True)
+            img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
+        except Exception:
+            img = QImage(8, 8, QImage.Format_RGB888)
+            img.fill(Qt.white)
+        self.cache[i] = (want, img, sc == want)
+        if len(self.cache) > 10 or sum(v[1].sizeInBytes() for v in self.cache.values()) > 220_000_000:
+            for k in sorted(self.cache, key=lambda k: -abs(k - i))[:max(1, len(self.cache) - 5)]:
+                if k != i:
+                    del self.cache[k]
+        return img
+
+    def _visible(self, rect: QRectF) -> range:
+        if not self.rects:
+            return range(0)
+        a = max(0, bisect.bisect_right(self.tops, rect.top()) - 1)
+        b = min(len(self.rects), bisect.bisect_right(self.tops, rect.bottom()))
+        return range(a, b)
+
+    def _do_rerender(self):
+        want = round(self.transform().m11() * self.devicePixelRatioF(), 3)
+        vis = self.mapToScene(self.viewport().rect()).boundingRect()
+        for i in self._visible(vis):
+            if i not in self.cache or self.cache[i][0] != want:
+                self._render(i, want)
+        self.viewport().update()
+
+    def drawBackground(self, p: QPainter, rect: QRectF):
+        p.fillRect(rect, self.bg)
+        s = self.transform().m11()
+        want = round(s * self.devicePixelRatioF(), 3)
+        for i in self._visible(rect):
+            r = self.rects[i]
+            p.fillRect(r.translated(1.6 / s, 1.6 / s), QColor(0, 0, 0, 45))
+            ent = self.cache.get(i)
+            if ent is None:
+                self._render(i, want)
+                ent = self.cache[i]
+            img = ent[1]
+            stale = ent[0] != want
+            if stale:
+                self._rerender.start()
+            if not stale and ent[2]:
+                # Ảnh đã kết xuất đúng độ phân giải màn hình: vẽ 1:1, canh đúng điểm ảnh vật lý để chữ sắc nét
+                # (kể cả khi Windows đặt tỉ lệ hiển thị 125% / 150%).
+                dpr = self.devicePixelRatioF()
+                pt = p.worldTransform().map(r.topLeft())
+                p.save()
+                p.resetTransform()
+                p.setRenderHint(QPainter.SmoothPixmapTransform, False)
+                p.drawImage(QRectF(round(pt.x() * dpr) / dpr, round(pt.y() * dpr) / dpr,
+                                   img.width() / dpr, img.height() / dpr), img)
+                p.restore()
+            else:  # đang đổi mức phóng: tạm kéo giãn ảnh cũ, lát sau kết xuất lại cho nét
+                p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+                p.drawImage(r, img)
+
+    def drawForeground(self, p: QPainter, rect: QRectF):
+        s = self.transform().m11()
+        px = 1.0 / s
+        p.setRenderHint(QPainter.Antialiasing, True)
+        # kết quả tìm kiếm
+        for k, (pg, r) in enumerate(self.hits):
+            if pg < len(self.rects):
+                p.fillRect(self.to_scene(pg, r), QColor(255, 140, 0, 130) if k == self.hit_idx else QColor(255, 235, 0, 90))
+        # vùng chữ đang chọn
+        if self.sel_page is not None and self.sel_page < len(self.rects):
+            for r in self.sel_rects:
+                p.fillRect(self.to_scene(self.sel_page, r), QColor(40, 110, 255, 80))
+        # hình ảnh đang chọn
+        if self.sel_image and self.sel_image[0] < len(self.rects):
+            sr = self.to_scene(self.sel_image[0], self.sel_image[1]["bbox"])
+            p.setPen(QPen(QColor("#1a73e8"), 2 * px))
+            p.setBrush(QColor(26, 115, 232, 45))
+            p.drawRect(sr)
+        # chữ gốc dưới con trỏ (công cụ sửa chữ)
+        if self.tool == "edittext" and self.hover_run:
+            pg, run = self.hover_run
+            p.setPen(QPen(QColor("#1a73e8"), 1.2 * px, Qt.DashLine))
+            p.setBrush(QColor(26, 115, 232, 25))
+            p.drawRect(self.to_scene(pg, run["bbox"]).adjusted(-px, -px, px, px))
+        # ghi chú đang chọn
+        if self.annot and self.annot_rect is not None and self.annot[0] < len(self.rects):
+            sr = self.to_scene(self.annot[0], self.annot_rect)
+            p.setPen(QPen(QColor("#1a73e8"), 1.4 * px, Qt.DashLine))
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(sr)
+            if self.annot[2] in MOVABLE and self.annot[2] != "Text" and not self.rot[self.annot[0]][0]:
+                h = 5 * px
+                p.setPen(QPen(QColor("#1a73e8"), px))
+                p.setBrush(Qt.white)
+                p.drawRect(QRectF(sr.right() - h, sr.bottom() - h, 2 * h, 2 * h))
+        # khung đang kéo
+        if self.press is not None and self.cur is not None and self.press_page is not None:
+            a, b = self.press, self._clamp_to_page(self.press_page, self.cur)
+            col = self.colors["draw"]
+            if self.tool in ("rect", "ellipse"):
+                p.setPen(QPen(col, self.line_width))
+                p.setBrush(Qt.NoBrush)
+                (p.drawRect if self.tool == "rect" else p.drawEllipse)(QRectF(a, b).normalized())
+            elif self.tool in ("line", "arrow"):
+                p.setPen(QPen(col, self.line_width))
+                p.drawLine(a, b)
+            elif self.tool in ("image", "sign", "erase"):
+                c = {"erase": QColor("#d93025"), "sign": QColor("#188038")}.get(self.tool, QColor("#1a73e8"))
+                p.setPen(QPen(c, 1.3 * px, Qt.DashLine))
+                p.setBrush(QColor(c.red(), c.green(), c.blue(), 30))
+                p.drawRect(QRectF(a, b).normalized())
+        if self.tool == "edittext" and self.drag_run and self.press is not None and self.cur is not None \
+                and self.press_page is not None:
+            d = self.cur - self.press
+            if abs(d.x()) + abs(d.y()) > 3 * px:
+                p.setPen(QPen(QColor("#1a73e8"), 1.2 * px, Qt.DashLine))
+                p.setBrush(QColor(26, 115, 232, 40))
+                p.drawRect(self.to_scene(self.press_page, self.drag_run["bbox"]).translated(d))
+        if self.ink:
+            p.setPen(QPen(self.colors["draw"], self.line_width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.setBrush(Qt.NoBrush)
+            p.drawPolyline(QPolygonF(self.ink))
+
+    def _clamp_to_page(self, i: int, sp: QPointF) -> QPointF:
+        r = self.rects[i]
+        return QPointF(min(max(sp.x(), r.left()), r.right()), min(max(sp.y(), r.top()), r.bottom()))
+
+    # ------------------------------------------------------------ công cụ
+    def set_tool(self, tool: str, payload=None):
+        self.tool = tool
+        self.payload = payload
+        self.press = self.cur = None
+        self.ink = []
+        self.hover_run = None
+        if tool != "hand":
+            self.annot = None
+        cur = {"hand": Qt.OpenHandCursor, "select": Qt.IBeamCursor, "highlight": Qt.IBeamCursor,
+               "underline": Qt.IBeamCursor, "strike": Qt.IBeamCursor, "edittext": Qt.PointingHandCursor,
+               "note": Qt.PointingHandCursor}.get(tool, Qt.CrossCursor)
+        self.viewport().setCursor(cur)
+        hints = {
+            "select": "Kéo chuột qua chữ để chọn chữ, hoặc bấm vào một hình ảnh để chọn hình. Ctrl+C để sao chép.",
+            "highlight": "Kéo chuột qua chữ để tô sáng. Esc để thôi.",
+            "underline": "Kéo chuột qua chữ để gạch chân. Esc để thôi.",
+            "strike": "Kéo chuột qua chữ để gạch ngang. Esc để thôi.",
+            "edittext": "Bấm vào dòng chữ để sửa nội dung, hoặc giữ chuột kéo để dời dòng chữ sang chỗ khác.",
+            "text": "Bấm vào chỗ muốn thêm chữ.",
+            "note": "Bấm vào chỗ muốn đặt ghi chú.",
+            "image": "Kéo một khung tại chỗ muốn đặt ảnh (hoặc bấm một lần để đặt cỡ mặc định).",
+            "sign": "Kéo một khung tại vị trí muốn hiện chữ ký số.",
+            "erase": "Kéo một khung quanh vùng cần xoá trắng (nội dung bị xoá hẳn khỏi file).",
+            "ink": "Giữ chuột và vẽ tự do. Esc để thôi.",
+        }
+        self.message.emit(hints.get(tool, ""))
+        self.toolChanged.emit(tool)
+        self.viewport().update()
+
+    def _color_group(self) -> str:
+        if self.tool in MARK_TOOLS:
+            return "mark"
+        if self.tool in ("text", "edittext"):
+            return "text"
+        return "draw"
+
+    # ------------------------------------------------------------ chọn chữ
+    def _words(self, i: int) -> list:
+        if i not in self.words:
+            self.words[i] = self.model.doc[i].get_text("words")
+        return self.words[i]
+
+    def _nearest_word(self, ws: list, pt: pymupdf.Point) -> int:
+        best, bd = 0, 1e18
+        for k, w in enumerate(ws):
+            dx = max(w[0] - pt.x, 0, pt.x - w[2])
+            dy = max(w[1] - pt.y, 0, pt.y - w[3])
+            d = dx + 4 * dy
+            if d < bd:
+                best, bd = k, d
+                if d == 0:
+                    break
+        return best
+
+    def _update_selection(self):
+        i = self.press_page
+        ws = self._words(i)
+        if not ws:
+            self.sel_rects, self.sel_text = [], ""
+            return
+        a = self._nearest_word(ws, self.to_page(i, self.press))
+        b = self._nearest_word(ws, self.to_page(i, self.cur))
+        a, b = min(a, b), max(a, b)
+        lines: dict[tuple, list] = {}
+        for w in ws[a:b + 1]:
+            lines.setdefault((w[5], w[6]), []).append(w)
+        rects, texts = [], []
+        for key in lines:
+            l = lines[key]
+            rects.append(pymupdf.Rect(min(w[0] for w in l), min(w[1] for w in l), max(w[2] for w in l),
+                                      max(w[3] for w in l)))
+            texts.append(" ".join(w[4] for w in l))
+        self.sel_page, self.sel_rects, self.sel_text = i, rects, "\n".join(texts)
+
+    # ------------------------------------------------------------ chọn hình ảnh
+    def _images(self, i: int) -> list:
+        if i not in self.imgs:
+            self.imgs[i] = tools.page_images(self.model.doc[i])
+        return self.imgs[i]
+
+    def _select_image(self, i: int, info: dict):
+        self.sel_rects, self.sel_text = [], ""
+        self.sel_image = (i, info)
+        size = f"{info['width']} × {info['height']} px" if info.get("width") else ""
+        self.message.emit(f"Đã chọn hình ảnh {size}. Ctrl+C để sao chép, chuột phải để lưu thành file hoặc xoá.")
+        self.viewport().update()
+        self.selectionChanged.emit()
+
+    def _selected_qimage(self):
+        i, info = self.sel_image
+        pix = tools.image_pixmap(self.model.doc, self.model.doc[i], info)
+        fmt = QImage.Format_RGBA8888 if pix.alpha else QImage.Format_RGB888
+        return QImage(pix.samples, pix.width, pix.height, pix.stride, fmt).copy()
+
+    def copy_image(self) -> bool:
+        if not self.sel_image:
+            return False
+        QGuiApplication.clipboard().setImage(self._selected_qimage())
+        self.message.emit("Đã sao chép hình ảnh. Dán (Ctrl+V) vào Word, Zalo, Paint… để dùng.")
+        return True
+
+    def save_image(self) -> bool:
+        if not self.sel_image:
+            self.message.emit("Chưa chọn hình ảnh nào. Dùng công cụ Chọn rồi bấm vào hình ảnh.")
+            return False
+        from PySide6.QtWidgets import QFileDialog
+        i, info = self.sel_image
+        base = os.path.splitext(self.model.title)[0]
+        start = os.path.join(os.path.dirname(self.model.path) if self.model.path else "", f"{base}_trang{i + 1}_anh.png")
+        path, _ = QFileDialog.getSaveFileName(self, "Lưu hình ảnh", start, "PNG (*.png);;JPG (*.jpg)")
+        if not path:
+            return False
+        if not path.lower().endswith((".png", ".jpg", ".jpeg")):
+            path += ".png"
+        tools.save_image(self.model.doc, self.model.doc[i], info, path)
+        self.message.emit(f"Đã lưu hình ảnh: {path}")
+        return True
+
+    def delete_image(self) -> bool:
+        if not self.sel_image:
+            return False
+        i, info = self.sel_image
+        self.sel_image = None
+        with self.model.edit(i):
+            tools.delete_image(self.model.doc[i], info)
+        self.message.emit("Đã xoá hình ảnh khỏi trang (Ctrl+Z để lấy lại).")
+        return True
+
+    def clear_selection(self):
+        self.sel_image = None
+        self.sel_rects, self.sel_text, self.sel_page = [], "", None
+        self.viewport().update()
+        self.selectionChanged.emit()
+
+    def copy_selection(self) -> bool:
+        if self.sel_image:
+            return self.copy_image()
+        if self.sel_text:
+            QGuiApplication.clipboard().setText(self.sel_text)
+            self.message.emit("Đã sao chép chữ đang chọn.")
+            return True
+        return False
+
+    def mark_selection(self, kind: str):
+        if not self.sel_rects or self.sel_page is None:
+            return
+        i, rects = self.sel_page, list(self.sel_rects)
+        col = qcolor_to_rgb(self.colors["mark"] if kind == "highlight" else self.colors["draw"])
+        with self.model.edit(i):
+            page = self.model.doc[i]
+            fn = {"highlight": page.add_highlight_annot, "underline": page.add_underline_annot,
+                  "strike": page.add_strikeout_annot}[kind]
+            a = fn(quads=[r.quad for r in rects])
+            a.set_colors(stroke=col)
+            a.update()
+        self.clear_selection()
+
+    # ------------------------------------------------------------ ghi chú
+    def _annot_at(self, i: int, pt: pymupdf.Point):
+        found = None
+        try:
+            for a in self.model.doc[i].annots():
+                if pt in a.rect + (-2, -2, 2, 2):
+                    found = (i, a.xref, a.type[1], pymupdf.Rect(a.rect))
+        except Exception:
+            pass
+        return found
+
+    def _load_annot(self):
+        if not self.annot:
+            return None, None
+        page = self.model.doc[self.annot[0]]
+        try:
+            return page, page.load_annot(self.annot[1])
+        except Exception:
+            return page, None
+
+    def _hover_note(self, e, sp):
+        """Rê chuột vào ghi chú (hoặc phần tô sáng/hình vẽ có lời ghi) thì hiện nội dung ngay cạnh con trỏ."""
+        import html as _html
+        i = self.page_at(sp, clamp=False)
+        hit = None
+        if i is not None:
+            if i not in self.notes:
+                self.notes[i] = tools.page_notes(self.model.doc[i])
+            if self.notes[i]:
+                pt = self.to_page(i, sp)
+                for rect, kind, text, who, when in self.notes[i]:
+                    if pt in rect + (-2, -2, 2, 2):
+                        hit = (i, rect.x0, rect.y0, kind, text, who, when)
+        if hit is None:
+            if self._note_tip is not None:
+                self._note_tip = None
+                QToolTip.hideText()
+            return
+        if hit != self._note_tip:
+            self._note_tip = hit
+            head = "Ghi chú" + (f" · {_html.escape(hit[5])}" if hit[5] else "") + (f" · {hit[6][:16]}" if hit[6] else "")
+            body = _html.escape(hit[4]).replace("\n", "<br>")
+            QToolTip.showText(e.globalPosition().toPoint(),
+                              f"<div style='max-width:360px'><div style='color:#80868b;font-size:11px'>{head}</div>"
+                              f"<div style='margin-top:3px'>{body}</div></div>", self.viewport())
+
+    def delete_selected_annot(self) -> bool:
+        if not self.annot:
+            return False
+        i, xref = self.annot[0], self.annot[1]
+        self.annot = None
+        with self.model.edit(i):
+            page = self.model.doc[i]
+            for a in page.annots():
+                if a.xref == xref:
+                    page.delete_annot(a)
+                    break
+        return True
+
+    def edit_selected_annot(self):
+        if not self.annot or self.annot[2] != "Text":
+            return
+        i, xref = self.annot[0], self.annot[1]
+        page = self.model.doc[i]
+        a = page.load_annot(xref)
+        text, ok = QInputDialog.getMultiLineText(self, "Sửa ghi chú", "Nội dung:", a.info.get("content", ""))
+        if ok:
+            with self.model.edit(i):
+                page = self.model.doc[i]
+                a = page.load_annot(xref)
+                a.set_info(content=text)
+                a.update()
+
+    # ------------------------------------------------------------ biểu mẫu, liên kết
+    def _click_widget(self, i: int, pt) -> bool:
+        page = self.model.doc[i]
+        try:
+            widgets = list(page.widgets())
+        except Exception:
+            return False
+        for w in widgets:
+            if pt not in w.rect:
+                continue
+            t = w.field_type
+            if t == pymupdf.PDF_WIDGET_TYPE_SIGNATURE:
+                self.message.emit("Đây là ô chữ ký số. Dùng menu Ký & Bảo mật để ký hoặc kiểm tra chữ ký.")
+                return True
+            if w.field_flags & 1:  # chỉ đọc
+                return True
+            name = w.field_label or w.field_name or "Ô nhập"
+            xref = w.xref
+            new = None
+            if t == pymupdf.PDF_WIDGET_TYPE_CHECKBOX:
+                new = not bool(w.field_value and str(w.field_value) not in ("Off", "False"))
+            elif t == pymupdf.PDF_WIDGET_TYPE_RADIOBUTTON:
+                new = True
+            elif t in (pymupdf.PDF_WIDGET_TYPE_COMBOBOX, pymupdf.PDF_WIDGET_TYPE_LISTBOX):
+                opts = [o[1] if isinstance(o, (list, tuple)) else o for o in (w.choice_values or [])]
+                cur = opts.index(w.field_value) if w.field_value in opts else 0
+                val, ok = QInputDialog.getItem(self, "Điền biểu mẫu", name, opts, cur,
+                                               t == pymupdf.PDF_WIDGET_TYPE_COMBOBOX)
+                if not ok:
+                    return True
+                new = val
+            elif t == pymupdf.PDF_WIDGET_TYPE_TEXT:
+                multi = bool(w.field_flags & pymupdf.PDF_TX_FIELD_IS_MULTILINE)
+                if multi:
+                    val, ok = QInputDialog.getMultiLineText(self, "Điền biểu mẫu", name, w.field_value or "")
+                else:
+                    val, ok = QInputDialog.getText(self, "Điền biểu mẫu", name, text=w.field_value or "")
+                if not ok:
+                    return True
+                new = val
+            else:
+                return True
+            with self.model.edit(i):
+                for ww in self.model.doc[i].widgets():
+                    if ww.xref == xref:
+                        ww.field_value = new
+                        ww.update()
+                        break
+            return True
+        return False
+
+    def _click_link(self, i: int, pt) -> bool:
+        try:
+            links = self.model.doc[i].get_links()
+        except Exception:
+            return False
+        for l in links:
+            if pt in pymupdf.Rect(l["from"]):
+                if l["kind"] == pymupdf.LINK_GOTO and l.get("page", -1) >= 0:
+                    to = l.get("to")
+                    self.goto_page(l["page"], to.y if to else 0)
+                    return True
+                if l["kind"] == pymupdf.LINK_URI and l.get("uri"):
+                    uri = l["uri"]
+                    if QMessageBox.question(self, "Mở liên kết", f"Mở liên kết này trong trình duyệt?\n\n{uri}") \
+                            == QMessageBox.Yes:
+                        QDesktopServices.openUrl(QUrl(uri))
+                    return True
+        return False
+
+    # ------------------------------------------------------------ chuột
+    def mousePressEvent(self, e):
+        if e.button() != Qt.LeftButton:
+            return super().mousePressEvent(e)
+        sp = self.mapToScene(e.position().toPoint())
+        i = self.page_at(sp, clamp=False)
+        self.cur = sp
+        if self.tool == "hand":
+            if i is not None:
+                pt = self.to_page(i, sp)
+                if self.annot and self.annot[0] == i and self.annot[2] in MOVABLE:
+                    r = self.annot_rect
+                    h = 7 / self.transform().m11()
+                    if self.annot[2] != "Text" and not self.rot[i][0] and abs(pt.x - r.x1) <= h \
+                            and abs(pt.y - r.y1) <= h:
+                        self.annot_mode, self.annot_off = "resize", pt
+                        return
+                hit = self._annot_at(i, pt)
+                if hit:
+                    self.annot = hit[:3]
+                    self.annot_rect = hit[3]
+                    if hit[2] in MOVABLE:
+                        self.annot_mode, self.annot_off = "move", pt - hit[3].tl
+                    self.viewport().update()
+                    return
+            if self.annot:
+                self.annot = None
+                self.viewport().update()
+            self.pan = (e.position(), self.horizontalScrollBar().value(), self.verticalScrollBar().value(), i, sp)
+            self.viewport().setCursor(Qt.ClosedHandCursor)
+            return
+        if i is None:
+            return
+        self.press, self.press_page = sp, i
+        if self.tool == "ink":
+            self.ink = [sp]
+        elif self.tool == "edittext":
+            self.drag_run = tools.text_run_at(self.model.doc[i], self.to_page(i, sp))
+        elif self.tool == "select" or self.tool in MARK_TOOLS:
+            self.sel_rects, self.sel_text = [], ""
+            self.sel_image = None
+            if not self._words(i) and not (self.tool == "select" and self._images(i)):
+                self.message.emit("Trang này không có lớp chữ (có thể là bản scan). Dùng Chuyển đổi → OCR trước.")
+        self.viewport().update()
+
+    def mouseMoveEvent(self, e):
+        sp = self.mapToScene(e.position().toPoint())
+        self.cur = sp
+        if self.pan:
+            d = e.position() - self.pan[0]
+            self.horizontalScrollBar().setValue(int(self.pan[1] - d.x()))
+            self.verticalScrollBar().setValue(int(self.pan[2] - d.y()))
+            return
+        if self.annot_mode and self.annot:
+            i = self.annot[0]
+            pt = self.to_page(i, sp)
+            r = pymupdf.Rect(self.annot_rect)
+            if self.annot_mode == "move":
+                tl = pt - self.annot_off
+                ub = self.rot[i][3]
+                tl = pymupdf.Point(min(max(tl.x, ub.x0), ub.x1 - r.width), min(max(tl.y, ub.y0), ub.y1 - r.height))
+                self.annot_rect = pymupdf.Rect(tl.x, tl.y, tl.x + r.width, tl.y + r.height)
+            else:
+                self.annot_rect = pymupdf.Rect(r.x0, r.y0, max(pt.x, r.x0 + 8), max(pt.y, r.y0 + 8))
+            self.annot_moved = True
+            self.viewport().update()
+            return
+        if self.press is None:
+            self._hover_note(e, sp)
+        if self.tool == "edittext" and self.press is None:
+            i = self.page_at(sp, clamp=False)
+            run = None
+            if i is not None:
+                if i not in self.dicts:
+                    self.dicts[i] = tools.text_dict(self.model.doc[i])
+                run = tools.text_run_at(self.model.doc[i], self.to_page(i, sp), d=self.dicts[i])
+            new = (i, run) if run else None
+            if (new is None) != (self.hover_run is None) or (new and self.hover_run and
+                                                             new[1]["bbox"] != self.hover_run[1]["bbox"]):
+                self.hover_run = new
+                self.viewport().update()
+            return
+        if self.press is None:
+            return
+        if self.tool == "ink":
+            self.ink.append(self._clamp_to_page(self.press_page, sp))
+        elif self.tool == "select" or self.tool in MARK_TOOLS:
+            self._update_selection()
+        self.viewport().update()
+
+    def mouseReleaseEvent(self, e):
+        if e.button() != Qt.LeftButton:
+            return super().mouseReleaseEvent(e)
+        sp = self.mapToScene(e.position().toPoint())
+        try:
+            self._release(e, sp)
+        except Exception as ex:
+            QMessageBox.warning(self, "PDF Editor Lite", f"Không thực hiện được thao tác:\n{ex}")
+        finally:
+            self.press = None
+            self.ink = []
+            self.pan = None
+            self.annot_mode = None
+            self.viewport().update()
+
+    def _release(self, e, sp: QPointF):
+        if self.pan:
+            start, _h, _v, i, sp0 = self.pan
+            self.pan = None
+            self.viewport().setCursor(Qt.OpenHandCursor)
+            if (e.position() - start).manhattanLength() < 4 and i is not None:
+                pt = self.to_page(i, sp0)
+                if not self._click_widget(i, pt):
+                    self._click_link(i, pt)
+            return
+        if self.annot_mode and self.annot:
+            if getattr(self, "annot_moved", False):
+                self.annot_moved = False
+                i, xref = self.annot[0], self.annot[1]
+                rect = pymupdf.Rect(self.annot_rect)
+                with self.model.edit(i):
+                    page = self.model.doc[i]
+                    a = page.load_annot(xref)
+                    a.set_rect(rect)
+                    a.update()
+                page = self.model.doc[i]
+                self.annot_rect = pymupdf.Rect(page.load_annot(xref).rect)
+            return
+        if self.press is None or self.press_page is None:
+            return
+        i = self.press_page
+        a, b = self.to_page(i, self.press), self.to_page(i, sp)
+        rect = pymupdf.Rect(a, b)
+        rect.normalize()
+        small = rect.width < 4 and rect.height < 4
+        tool = self.tool
+        col = qcolor_to_rgb(self.colors["draw"])
+        if tool == "select":
+            if small:  # bấm một lần (không kéo): chọn hình ảnh tại đó nếu có
+                self.sel_rects, self.sel_text = [], ""
+                hit = tools.image_at(self._images(i), a)
+                if hit:
+                    self._select_image(i, hit)
+                    return
+            self.selectionChanged.emit()
+            if self.sel_text:
+                self.message.emit(f"Đã chọn {len(self.sel_text)} ký tự. Ctrl+C để sao chép, chuột phải để tô sáng.")
+        elif tool in MARK_TOOLS:
+            if self.sel_rects:
+                self.mark_selection(tool)
+        elif tool == "ink":
+            pts = [tuple(self.to_page(i, q)) for q in self.ink]
+            if len(pts) > 1:
+                with self.model.edit(i):
+                    page = self.model.doc[i]
+                    an = page.add_ink_annot([pts])
+                    an.set_colors(stroke=col)
+                    an.set_border(width=self.line_width)
+                    an.update()
+        elif tool in ("rect", "ellipse") and not small:
+            with self.model.edit(i):
+                page = self.model.doc[i]
+                an = page.add_rect_annot(rect) if tool == "rect" else page.add_circle_annot(rect)
+                an.set_colors(stroke=col)
+                an.set_border(width=self.line_width)
+                an.update()
+        elif tool in ("line", "arrow") and not small:
+            with self.model.edit(i):
+                page = self.model.doc[i]
+                an = page.add_line_annot(a, b)
+                if tool == "arrow":
+                    an.set_line_ends(pymupdf.PDF_ANNOT_LE_NONE, pymupdf.PDF_ANNOT_LE_CLOSED_ARROW)
+                an.set_colors(stroke=col, fill=col)
+                an.set_border(width=self.line_width)
+                an.update()
+        elif tool == "erase" and not small:
+            with self.model.edit(i):
+                page = self.model.doc[i]
+                page.add_redact_annot(rect, fill=(1, 1, 1), cross_out=False)
+                page.apply_redactions()
+        elif tool == "note":
+            text, ok = QInputDialog.getMultiLineText(self, "Ghi chú", "Nội dung ghi chú:")
+            if ok and text.strip():
+                with self.model.edit(i):
+                    page = self.model.doc[i]
+                    an = page.add_text_annot(a, text, icon="Comment")
+                    an.set_colors(stroke=(1, 0.82, 0))
+                    an.set_info(content=text, subject=tools.NOTE_MARK, title=_user_name())
+                    an.update()
+            self.set_tool("hand")
+        elif tool == "text":
+            from .dialogs import TextDialog
+            dlg = TextDialog(self, "Thêm chữ", "", self.font_size, self.colors["text"], family=self.font_family)
+            if dlg.exec() and dlg.text().strip():
+                self.font_size, self.colors["text"], self.font_family = dlg.size(), dlg.color(), dlg.family()
+                top_left = self.to_display(i, a if small else rect.tl)
+                if not small and self.rot[i][0]:
+                    dr = rect * self.rot[i][1]
+                    dr.normalize()
+                    top_left = dr.tl
+                with self.model.edit(i):
+                    tools.insert_text_lines(self.model.doc[i], top_left, dlg.text(), dlg.size(),
+                                            qcolor_to_rgb(dlg.color()), dlg.family())
+                    self.model.fonts_added = True
+                self.message.emit("Đã thêm chữ. Muốn sửa hoặc dời chỗ: chọn công cụ Sửa chữ gốc rồi bấm/kéo dòng chữ.")
+            self.set_tool("hand")
+        elif tool == "image":
+            path = self.payload
+            if self.rot[i][0]:  # xoay ảnh ngược lại để ảnh đứng thẳng trên trang đang xoay
+                img = QImage(path).transformed(QTransform().rotate(-self.rot[i][0]), Qt.SmoothTransformation)
+                fd, tmp = tempfile.mkstemp(suffix=".png")
+                os.close(fd)
+                img.save(tmp)
+                pix = pymupdf.Pixmap(tmp)
+                os.unlink(tmp)
+            else:
+                pix = pymupdf.Pixmap(path)
+            if small:
+                w = min(160.0, self.rects[i].width() * 0.4)
+                h = w * pix.height / max(1, pix.width)
+                rect = pymupdf.Rect(a.x - w / 2, a.y - h / 2, a.x + w / 2, a.y + h / 2)
+            else:  # giữ đúng tỉ lệ ảnh trong khung đã kéo
+                k = min(rect.width / pix.width, rect.height / pix.height)
+                w, h = pix.width * k, pix.height * k
+                c = (rect.tl + rect.br) / 2
+                rect = pymupdf.Rect(c.x - w / 2, c.y - h / 2, c.x + w / 2, c.y + h / 2)
+            with self.model.edit(i):
+                page = self.model.doc[i]
+                an = page.add_stamp_annot(rect, stamp=pix)
+                an.set_info(subject="lp|image")
+            self.set_tool("hand")
+            an = self._annot_at(i, (rect.tl + rect.br) / 2)
+            if an:
+                self.annot, self.annot_rect = an[:3], an[3]
+            self.message.emit("Đã đặt ảnh. Kéo để di chuyển, kéo góc dưới phải để đổi cỡ, Delete để xoá.")
+        elif tool == "sign":
+            if rect.width < 30 or rect.height < 15:
+                self.message.emit("Khung chữ ký quá nhỏ, hãy kéo khung lớn hơn.")
+                return
+            self.set_tool("hand")
+            self.signRequested.emit(i, rect)
+        elif tool == "edittext":
+            if not small and self.drag_run:
+                run = self.drag_run
+                new_origin = run["origin"] + (b - a)
+                with self.model.edit(i):
+                    used = tools.replace_text_run(self.model.doc[i], run, run["text"], origin=new_origin)
+                    self.model.fonts_added = True
+                self.message.emit(f"Đã dời dòng chữ (phông thay thế: {used}).")
+            else:
+                self._edit_text_at(i, a)
+            self.drag_run = None
+
+    def _edit_text_at(self, i: int, pt):
+        from .dialogs import TextDialog
+        run = tools.text_run_at(self.model.doc[i], pt)
+        if not run:
+            self.message.emit("Không có chữ gốc tại vị trí này (nếu là bản scan thì dùng Xoá vùng + Thêm chữ).")
+            return
+        dlg = TextDialog(self, "Sửa chữ gốc", run["text"], round(run["size"], 2), QColor.fromRgbF(*run["color"]),
+                         single_line=True, style=(bool(run["flags"] & 16), bool(run["flags"] & 2)),
+                         note=f"Phông gốc: {run['font'].split('+')[-1]}. Để trống rồi OK nếu muốn xoá dòng này.")
+        if not dlg.exec():
+            return
+        new = dlg.text().replace("\n", " ")
+        with self.model.edit(i):
+            page = self.model.doc[i]
+            used = tools.replace_text_run(page, run, new, dlg.size(), qcolor_to_rgb(dlg.color()),
+                                          bold=dlg.bold(), italic=dlg.italic())
+            self.model.fonts_added = True
+        self.hover_run = None
+        if used:
+            self.message.emit(f"Đã sửa chữ (phông thay thế: {used}).")
+
+    def mouseDoubleClickEvent(self, e):
+        if self.tool == "hand" and e.button() == Qt.LeftButton:
+            sp = self.mapToScene(e.position().toPoint())
+            i = self.page_at(sp, clamp=False)
+            if i is not None:
+                hit = self._annot_at(i, self.to_page(i, sp))
+                if hit and hit[2] == "Text":
+                    self.annot, self.annot_rect = hit[:3], hit[3]
+                    self.annot_mode = None
+                    self.edit_selected_annot()
+                    return
+        super().mouseDoubleClickEvent(e)
+
+    def contextMenuEvent(self, e):
+        sp = self.mapToScene(e.pos())
+        i = self.page_at(sp, clamp=False)
+        m = QMenu(self)
+        if self.sel_text:
+            m.addAction(icon_for("Sao chép"), "Sao chép", self.copy_selection)
+            m.addAction(icon_for("Tô sáng"), "Tô sáng", lambda: self.mark_selection("highlight"))
+            m.addAction(icon_for("Gạch chân"), "Gạch chân", lambda: self.mark_selection("underline"))
+            m.addAction(icon_for("Gạch ngang"), "Gạch ngang", lambda: self.mark_selection("strike"))
+            m.addSeparator()
+        if i is not None:
+            pt0 = self.to_page(i, sp)
+            img = tools.image_at(self._images(i), pt0)
+            if img and not self.sel_text and not self._annot_at(i, pt0):
+                self._select_image(i, img)
+                m.addAction(icon_for("Sao chép hình ảnh"), "Sao chép hình ảnh", lambda: self._safe(self.copy_image))
+                m.addAction(icon_for("Lưu hình ảnh thành file…"), "Lưu hình ảnh thành file…", lambda: self._safe(self.save_image))
+                m.addAction(icon_for("Xoá hình ảnh khỏi trang"), "Xoá hình ảnh khỏi trang", lambda: self._safe(self.delete_image))
+                m.addSeparator()
+        if i is not None:
+            pt = self.to_page(i, sp)
+            hit = self._annot_at(i, pt)
+            if hit:
+                self.annot, self.annot_rect = hit[:3], hit[3]
+                self.viewport().update()
+                if hit[2] == "Text":
+                    m.addAction(icon_for("Sửa nội dung…"), "Sửa nội dung…", self.edit_selected_annot)
+                m.addAction(icon_for("Xoá ghi chú/ảnh này"), "Xoá ghi chú/ảnh này", self.delete_selected_annot)
+                m.addSeparator()
+            m.addAction(icon_for("Sửa chữ gốc tại đây…"), "Sửa chữ gốc tại đây…", lambda: self._safe(self._edit_text_at, i, pt))
+        m.addAction(icon_for("Công cụ bàn tay"), "Công cụ bàn tay", lambda: self.set_tool("hand"))
+        m.addAction(icon_for("Công cụ chọn chữ / hình ảnh"), "Công cụ chọn chữ / hình ảnh", lambda: self.set_tool("select"))
+        m.exec(e.globalPos())
+
+    def _safe(self, fn, *a):
+        try:
+            fn(*a)
+        except Exception as ex:
+            QMessageBox.warning(self, "PDF Editor Lite", f"Không thực hiện được thao tác:\n{ex}")
+
+    def keyPressEvent(self, e):
+        k = e.key()
+        if k == Qt.Key_Escape:
+            self.clear_selection()
+            self.annot = None
+            if self.tool != "hand":
+                self.set_tool("hand")
+            return
+        if k in (Qt.Key_Delete, Qt.Key_Backspace) and self.sel_image and not self.annot:
+            self._safe(self.delete_image)
+            return
+        if k in (Qt.Key_Delete, Qt.Key_Backspace) and self.annot:
+            self._safe(self.delete_selected_annot)
+            return
+        if k in (Qt.Key_PageDown, Qt.Key_Space):
+            sb = self.verticalScrollBar()
+            sb.setValue(sb.value() + int(self.viewport().height() * 0.9))
+            return
+        if k == Qt.Key_PageUp:
+            sb = self.verticalScrollBar()
+            sb.setValue(sb.value() - int(self.viewport().height() * 0.9))
+            return
+        if k == Qt.Key_Home and e.modifiers() & Qt.ControlModifier:
+            return self.goto_page(0)
+        if k == Qt.Key_End and e.modifiers() & Qt.ControlModifier:
+            return self.goto_page(len(self.rects) - 1)
+        super().keyPressEvent(e)
+
+    # ------------------------------------------------------------ tìm kiếm
+    def search(self, text: str, forward: bool = True) -> str:
+        text = text.strip()
+        if not text:
+            self.hits, self.hit_idx, self.query = [], -1, ""
+            self.viewport().update()
+            return ""
+        if text != self.query:
+            self.query = text
+            self.hits = []
+            for i, page in enumerate(self.model.doc):
+                for q in page.search_for(text, quads=False):
+                    self.hits.append((i, q))
+                if len(self.hits) > 5000:
+                    break
+            self.hit_idx = -1
+            if self.hits:  # bắt đầu từ trang đang xem
+                cur = self._cur_page
+                nxt = next((k for k, h in enumerate(self.hits) if h[0] >= cur), 0)
+                self.hit_idx = nxt - 1 if forward else nxt
+        if not self.hits:
+            self.viewport().update()
+            return "Không tìm thấy"
+        self.hit_idx = (self.hit_idx + (1 if forward else -1)) % len(self.hits)
+        pg, r = self.hits[self.hit_idx]
+        self.ensure_visible(pg, r)
+        self.viewport().update()
+        return f"{self.hit_idx + 1}/{len(self.hits)}"

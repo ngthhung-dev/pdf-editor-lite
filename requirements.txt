@@ -1,0 +1,6 @@
+PyMuPDF>=1.26
+pymupdf-fonts
+PySide6-Essentials>=6.6
+pyHanko>=0.29
+openpyxl
+fonttools
