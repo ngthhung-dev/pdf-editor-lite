@@ -24,6 +24,11 @@ from .viewer import DocModel, Viewer
 
 APP_NAME = "PDF Editor Lite"
 VERSION = "1.0.0"
+try:                                    # số build do máy build ghi vào (bản chạy từ mã nguồn thì không có)
+    from ._build import BUILD
+except Exception:
+    BUILD = ""
+VERSION_TEXT = VERSION + (f" (build {BUILD})" if BUILD else "")
 AUTHOR = "ngthhung"
 DEFAULT_SIZE = (1100, 720)  # kích thước cửa sổ khi mở app
 OPEN_FILTER = ("Tất cả file hỗ trợ (*.pdf *.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp *.doc *.docx *.xls "
@@ -714,7 +719,7 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._tab_changed)
         welcome = QLabel(
             f"<div style='text-align:center'><p style='font-size:26px;color:#3c4043'><b>{APP_NAME}</b></p>"
-            f"<p style='font-size:12px;color:#80868b'>{APP_NAME} by {AUTHOR} · phiên bản {VERSION}</p>"
+            f"<p style='font-size:12px;color:#80868b'>{APP_NAME} by {AUTHOR} · phiên bản {VERSION_TEXT}</p>"
             "<p style='font-size:14px;color:#5f6368'>Kéo thả file PDF, ảnh hoặc Word/Excel vào đây<br>"
             "hoặc bấm <b>Ctrl+O</b> để mở file.</p></div>")
         welcome.setAlignment(Qt.AlignCenter)
@@ -2575,7 +2580,7 @@ class MainWindow(QMainWindow):
         d = ReportDialog(self, "Giới thiệu",
                          "<style>p,td{font-size:13px;line-height:150%} td{padding:3px 12px 3px 0;vertical-align:top}</style>"
                          f"<h2 style='margin:2px 0'>{APP_NAME}</h2>"
-                         f"<p><b>{APP_NAME} by {AUTHOR}</b><br>Phiên bản {VERSION} · lõi PDF: PyMuPDF {pymupdf.VersionBind}</p>"
+                         f"<p><b>{APP_NAME} by {AUTHOR}</b><br>Phiên bản {VERSION_TEXT} · lõi PDF: PyMuPDF {pymupdf.VersionBind}</p>"
                          "<p>Trình xem và chỉnh sửa PDF gọn nhẹ. Cách dùng: Trợ giúp → Hướng dẫn sử dụng (F1).</p>"
                          "<h3 style='color:#1a56c4;margin:12px 0 2px 0'>Tình trạng các thành phần trên máy này</h3>"
                          + self.component_status() +
@@ -2590,7 +2595,7 @@ class MainWindow(QMainWindow):
 def selftest(out: str | None = None) -> int:
     """Kiểm tra nhanh bản đóng gói: các thư viện và tài nguyên kèm theo có đủ không. Dùng khi build bộ cài."""
     import json
-    rep: dict = {"version": VERSION, "frozen": tools.FROZEN, "app_dir": tools.app_dir()}
+    rep: dict = {"version": VERSION, "build": BUILD, "frozen": tools.FROZEN, "app_dir": tools.app_dir()}
 
     def probe(name, fn):
         try:

@@ -39,6 +39,10 @@ jobs:
         with:
           path: build_win/vendor/LibreOffice.msi
           key: vendor-libreoffice-v1
+      - name: Ghi so build vao app
+        shell: pwsh
+        run: |
+          "BUILD = '${{ github.run_number }}'" | Set-Content -Encoding utf8 litepdf/_build.py
       - name: Build
         timeout-minutes: 90
         shell: pwsh
