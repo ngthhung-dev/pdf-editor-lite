@@ -2359,10 +2359,101 @@ def selftest(out: str | None = None) -> int:
     return 0
 
 
+def _instance_name() -> str:
+    """Tên kênh nội bộ để các lần mở app của CÙNG một người dùng tìm thấy nhau."""
+    import getpass
+    import hashlib
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = "user"
+    return "PDFEditorLite-" + hashlib.md5(user.encode("utf-8", "ignore")).hexdigest()[:10]
+
+
+def send_to_running(files: list[str]) -> bool:
+    """App đang mở sẵn thì chuyển các file cho cửa sổ đó mở thành tab mới. Trả về True nếu đã chuyển xong."""
+    import json
+    from PySide6.QtNetwork import QLocalSocket
+    sock = QLocalSocket()
+    sock.connectToServer(_instance_name())
+    if not sock.waitForConnected(400):
+        return False
+    if sys.platform.startswith("win"):      # cho phép cửa sổ đang mở tự nổi lên trước (Windows mặc định chặn việc này)
+        try:
+            import ctypes
+            ctypes.windll.user32.AllowSetForegroundWindow(-1)
+        except Exception:
+            pass
+    sock.write(json.dumps({"files": files}).encode("utf-8"))
+    sock.flush()
+    sock.waitForBytesWritten(2000)
+    # Đã nối được tức là có cửa sổ đang mở và nó sẽ nhận file. Chờ nó đóng kết nối (đã nhận xong) rồi thoát.
+    if sock.state() != QLocalSocket.UnconnectedState:
+        sock.waitForDisconnected(3000)
+    return True
+
+
+def listen_for_files(win) -> None:
+    """Nhận file từ các lần mở app sau (nhấp đúp file khác...) và mở thành tab trong cửa sổ này."""
+    import json
+    from PySide6.QtNetwork import QLocalServer
+    name = _instance_name()
+    server = QLocalServer(win)
+    if not server.listen(name):             # kênh cũ còn sót lại sau một lần app thoát đột ngột
+        QLocalServer.removeServer(name)
+        server.listen(name)
+
+    def incoming():
+        conn = server.nextPendingConnection()
+        if conn is None:
+            return
+
+        def read():
+            try:
+                files = json.loads(bytes(conn.readAll()).decode("utf-8")).get("files", [])
+            except Exception:
+                files = []
+            conn.write(b"ok")
+            conn.flush()
+            conn.disconnectFromServer()
+            if win.isMinimized():
+                win.showNormal()
+            win.raise_()
+            win.activateWindow()
+            for f in files:
+                if os.path.exists(f):
+                    win.guard(lambda f=f: win.open_path(f))()
+        conn.readyRead.connect(read)
+    server.newConnection.connect(incoming)
+    win._instance_server = server
+
+
 def run(argv: list[str]) -> int:
     if len(argv) > 1 and argv[1] == "--selftest":
         return selftest(argv[2] if len(argv) > 2 else None)
     app = QApplication(argv)
+    files = [os.path.abspath(a) for a in argv[1:] if not a.startswith("-") and os.path.exists(a)]
+    lock = None
+    try:        # đã có một cửa sổ PDF Editor Lite đang mở: giao file cho nó rồi thoát, không mở cửa sổ thứ hai
+        import time
+        from PySide6.QtCore import QDir, QLockFile
+        if send_to_running(files):
+            return 0
+        # Chưa có cửa sổ nào nhận. Có thể nhiều file vừa được mở cùng lúc (chọn nhiều file rồi Enter): chỉ MỘT tiến trình
+        # giữ được khoá và trở thành cửa sổ chính, các tiến trình còn lại chờ nó khởi động xong rồi giao file cho nó.
+        lock = QLockFile(os.path.join(QDir.tempPath(), _instance_name() + ".lock"))
+        lock.setStaleLockTime(0)
+        if not lock.tryLock(0):
+            end = time.time() + 25
+            while time.time() < end:
+                if send_to_running(files):
+                    return 0
+                if lock.tryLock(0):          # cửa sổ chính đã thoát giữa chừng: tiến trình này lên thay
+                    break
+                time.sleep(0.25)
+    except Exception:
+        pass
+    app._instance_lock = lock
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(VERSION)
     app.setOrganizationName(AUTHOR)
@@ -2400,7 +2491,10 @@ def run(argv: list[str]) -> int:
     win = MainWindow()
     win.place_centered()
     win.show()
-    for a in argv[1:]:
-        if not a.startswith("-") and os.path.exists(a):
-            win.open_path(a)
+    try:
+        listen_for_files(win)
+    except Exception:
+        pass
+    for a in files:
+        win.open_path(a)
     return app.exec()
