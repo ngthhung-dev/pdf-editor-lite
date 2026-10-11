@@ -39,6 +39,9 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 ShowLanguageDialog=no
 ChangesAssociations=yes
+; app dang mo thi bo cai tu dong dong lai de ghi de duoc file moi (neu khong se van chay ban cu)
+CloseApplications=force
+RestartApplications=no
 #ifdef WithModel
 DiskSpanning=yes
 DiskSliceSize=2000000000

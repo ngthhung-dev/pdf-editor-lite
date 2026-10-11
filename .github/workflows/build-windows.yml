@@ -77,6 +77,12 @@ jobs:
           name: selftest
           path: build_win/selftest.json
           if-no-files-found: ignore
+      - name: Dat ten file cai kem so build
+        shell: pwsh
+        run: |
+          # moi ban build mot ten file rieng: tai nhieu lan khong bi lan voi file cu trong thu muc Downloads
+          Get-ChildItem build_win/output/*.exe | ForEach-Object { Rename-Item $_.FullName ($_.Name -replace '-Setup\.exe$', "-build${{ github.run_number }}-Setup.exe") }
+          Get-ChildItem build_win/output
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
@@ -90,6 +96,6 @@ jobs:
           name: PDF Editor Lite 1.0.0 (build ${{ github.run_number }})
           body: |
             Bo cai Windows 64-bit, tao tu dong.
-            Tai file PDF-Editor-Lite-1.0.0-Setup.exe ve va chay. Khi cai co the tich chon tung thanh phan.
+            Tai file PDF-Editor-Lite-1.0.0-build${{ github.run_number }}-Setup.exe ve va chay (dong PDF Editor Lite truoc khi cai). Khi cai co the tich chon tung thanh phan.
           files: build_win/output/*.exe
           fail_on_unmatched_files: true
