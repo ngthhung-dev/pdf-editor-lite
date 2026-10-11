@@ -3,8 +3,8 @@ VSVersionInfo(
   kids=[
     StringFileInfo([StringTable('040904B0', [
       StringStruct('CompanyName', 'ngthhung'),
-      StringStruct('FileDescription', 'PDF Editor Lite'),
-      StringStruct('FileVersion', '1.0.0'),
+      StringStruct('FileDescription', 'PDF Editor Lite by ngthhung'),
+      StringStruct('FileVersion', '1.0.0.0'),
       StringStruct('InternalName', 'PDFEditorLite'),
       StringStruct('OriginalFilename', 'PDFEditorLite.exe'),
       StringStruct('ProductName', 'PDF Editor Lite'),
