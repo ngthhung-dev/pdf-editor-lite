@@ -2453,6 +2453,8 @@ def run(argv: list[str]) -> int:
     if len(argv) > 1 and argv[1] == "--selftest":
         return selftest(argv[2] if len(argv) > 2 else None)
     app = QApplication(argv)
+    from . import vi_qt
+    vi_qt.install(app)            # nút và hộp thoại chuẩn của Qt hiện bằng tiếng Việt
     files = [os.path.abspath(a) for a in argv[1:] if not a.startswith("-") and os.path.exists(a)]
     lock = None
     try:        # đã có một cửa sổ PDF Editor Lite đang mở: giao file cho nó rồi thoát, không mở cửa sổ thứ hai

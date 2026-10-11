@@ -29,11 +29,16 @@ SolidCompression=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
+ShowLanguageDialog=no
 ChangesAssociations=yes
 #ifdef WithModel
 DiskSpanning=yes
 DiskSliceSize=2000000000
 #endif
+
+[Languages]
+; Inno Setup khong kem tieng Viet: dung file dich dat canh kich ban nay
+Name: "vi"; MessagesFile: "Vietnamese.isl"
 
 [Messages]
 SelectComponentsLabel2=Tích chọn những thành phần muốn cài, bỏ tích những thành phần không cần. Có thể chạy lại bộ cài này để thêm hoặc bớt thành phần sau.
