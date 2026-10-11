@@ -180,6 +180,13 @@ jobs:
           git config user.name "github-actions"; git config user.email "actions@github.com"
           git add -A && git commit -q -m "log run ${{ github.run_number }}"
           git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" build-logs
+      - name: Don nhanh thu nghiem (neu con)
+        continue-on-error: true
+        run: |
+          for b in mac-test mac-test-logs-arm64 mac-test-logs-intel; do
+            git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" --delete "$b" || true
+          done
+        working-directory: logs
       - name: Gom file cai
         id: files
         run: |
