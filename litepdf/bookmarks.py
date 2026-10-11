@@ -355,7 +355,7 @@ class BookmarkPanel(QWidget):
     def resync(self):
         """Tô sáng lại bookmark của chỗ đang xem: làm ngay, và làm lại sau khi khung xem đã co giãn xong."""
         for ms in (0, 180, 450):
-            QTimer.singleShot(ms, lambda: self.sync_to_view(force=True))
+            QTimer.singleShot(ms, self, lambda: self.sync_to_view(force=True))
 
     def sync_to_view(self, force: bool = False):
         """Chọn (tô sáng) bookmark gần nhất nằm ở trên hoặc ngay tại chỗ đang xem."""

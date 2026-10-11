@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import bisect
 import math
+import time
 import os
 import shutil
 import tempfile
@@ -191,6 +192,7 @@ class Viewer(QGraphicsView):
     signRequested = Signal(int, object)  # trang, pymupdf.Rect
     toolChanged = Signal(str)
     selectionChanged = Signal()
+    searchChanged = Signal(str)            # nhãn kết quả tìm đổi trong lúc dò tiếp ở nền
 
     def __init__(self, model: DocModel, parent=None):
         super().__init__(parent)
@@ -232,6 +234,10 @@ class Viewer(QGraphicsView):
         self.sel_rects: list[pymupdf.Rect] = []
         self.sel_text = ""
         self.hits: list[tuple[int, pymupdf.Rect]] = []
+        self.hit_pages: list[int] = []         # số trang của từng kết quả (song song với hits), để tra nhanh
+        self._scan: list[int] = []
+        self._scan_pos = 0
+        self._search_timer = QTimer(self, interval=0, timeout=self._search_tick)
         self.hit_idx = -1
         self.query = ""
         self.annot = None          # (trang, xref, loại)
@@ -243,6 +249,9 @@ class Viewer(QGraphicsView):
         self.font_family = "arial"
         self.hover_run = None
         self._rerender = QTimer(self, singleShot=True, interval=140, timeout=self._do_rerender)
+        self._lazy = QTimer(self, singleShot=True, interval=70, timeout=self._do_rerender)
+        self._render_at, self._render_paint, self._paint_no = 0.0, -1, 0
+        self.last_scroll = 0.0
         model.changed.connect(self._on_changed)
         self.verticalScrollBar().valueChanged.connect(self._on_scroll)
         self.layout_pages()
@@ -279,12 +288,17 @@ class Viewer(QGraphicsView):
         self.sel_rects, self.sel_text, self.hover_run = [], "", None
         if structure or page is None:
             self.annot = None
-            self.hits, self.hit_idx = [], -1
+            self._reset_search()                 # trang đã đổi: kết quả tìm cũ không còn đúng, lần tìm sau dò lại
             v = self.verticalScrollBar().value()
             self.layout_pages()
             self.apply_zoom()
             self.verticalScrollBar().setValue(v)
         else:
+            if self.query:                       # trang vừa sửa: bỏ kết quả tìm cũ của trang đó, lần tìm sau dò lại
+                keep = [h for h in self.hits if h[0] != page]
+                self._search_timer.stop()
+                self.hits, self.hit_pages, self.hit_idx, self.query = keep, [h[0] for h in keep], -1, ""
+                self._scan, self._scan_pos = [], 0
             self.cache.pop(page, None)
             self.words.pop(page, None)
             self.imgs.pop(page, None)
@@ -354,6 +368,7 @@ class Viewer(QGraphicsView):
     def _on_scroll(self, *_):
         if not self.rects:
             return
+        self.last_scroll = time.perf_counter()
         y = self.mapToScene(0, int(self.viewport().height() * 0.35)).y()
         i = max(0, min(bisect.bisect_right(self.tops, y) - 1, len(self.rects) - 1))
         if i != self._cur_page:
@@ -435,6 +450,9 @@ class Viewer(QGraphicsView):
         return range(a, b)
 
     def _do_rerender(self):
+        doc = self.model.doc
+        if doc is None or getattr(doc, "is_closed", False):
+            return
         want = round(self.transform().m11() * self.devicePixelRatioF(), 3)
         vis = self.mapToScene(self.viewport().rect()).boundingRect()
         for i in self._visible(vis):
@@ -444,6 +462,7 @@ class Viewer(QGraphicsView):
 
     def drawBackground(self, p: QPainter, rect: QRectF):
         p.fillRect(rect, self.bg)
+        self._paint_no += 1
         s = self.transform().m11()
         want = round(s * self.devicePixelRatioF(), 3)
         for i in self._visible(rect):
@@ -451,7 +470,15 @@ class Viewer(QGraphicsView):
             p.fillRect(r.translated(1.6 / s, 1.6 / s), QColor(0, 0, 0, 45))
             ent = self.cache.get(i)
             if ent is None:
+                # Đang kéo thanh cuộn lướt qua nhiều trang: không dựng từng trang lướt qua (mỗi trang mất vài chục ms,
+                # dựng hết thì cửa sổ khựng). Vẽ tạm trang trắng, dừng tay một nhịp mới dựng cho nét.
+                now = time.perf_counter()
+                if self._paint_no != self._render_paint and now - self._render_at < 0.1:
+                    p.fillRect(r, Qt.white)
+                    self._lazy.start()
+                    continue
                 self._render(i, want)
+                self._render_at, self._render_paint = time.perf_counter(), self._paint_no
                 ent = self.cache[i]
             img = ent[1]
             stale = ent[0] != want
@@ -477,9 +504,15 @@ class Viewer(QGraphicsView):
         px = 1.0 / s
         p.setRenderHint(QPainter.Antialiasing, True)
         # kết quả tìm kiếm
-        for k, (pg, r) in enumerate(self.hits):
-            if pg < len(self.rects):
-                p.fillRect(self.to_scene(pg, r), QColor(255, 140, 0, 130) if k == self.hit_idx else QColor(255, 235, 0, 90))
+        if self.hits:                            # chỉ vẽ kết quả của các trang đang hiện (tài liệu có thể có hàng nghìn kết quả)
+            vis = self._visible(rect)
+            lo = bisect.bisect_left(self.hit_pages, vis.start)
+            hi = bisect.bisect_left(self.hit_pages, vis.stop)
+            for k in range(lo, hi):
+                pg, r = self.hits[k]
+                if pg < len(self.rects):
+                    p.fillRect(self.to_scene(pg, r),
+                               QColor(255, 140, 0, 130) if k == self.hit_idx else QColor(255, 235, 0, 90))
         # vùng chữ đang chọn
         if self.sel_page is not None and self.sel_page < len(self.rects):
             for r in self.sel_rects:
@@ -886,6 +919,7 @@ class Viewer(QGraphicsView):
         self.viewport().update()
 
     def mouseMoveEvent(self, e):
+        self.last_scroll = time.perf_counter()
         sp = self.mapToScene(e.position().toPoint())
         self.cur = sp
         if self.pan:
@@ -1196,30 +1230,91 @@ class Viewer(QGraphicsView):
         super().keyPressEvent(e)
 
     # ------------------------------------------------------------ tìm kiếm
+    def _reset_search(self):
+        self._search_timer.stop()
+        self.hits, self.hit_pages, self.hit_idx, self.query = [], [], -1, ""
+        self._scan, self._scan_pos = [], 0
+
+    def _scanning(self) -> bool:
+        return self._scan_pos < len(self._scan)
+
+    def _scan_some(self, budget: float, first_only: bool = False):
+        """Dò tiếp các trang chưa tìm, trong khoảng thời gian cho phép. Kết quả luôn xếp theo thứ tự trang."""
+        end = time.perf_counter() + budget
+        doc = self.model.doc
+        while self._scan_pos < len(self._scan):
+            i = self._scan[self._scan_pos]
+            self._scan_pos += 1
+            try:
+                rs = doc[i].search_for(self.query, quads=False)
+            except Exception:
+                rs = []
+            if rs:
+                k = bisect.bisect_left(self.hit_pages, i)
+                self.hits[k:k] = [(i, r) for r in rs]
+                self.hit_pages[k:k] = [i] * len(rs)
+                if self.hit_idx >= k:
+                    self.hit_idx += len(rs)
+                if len(self.hits) > 5000:
+                    self._scan_pos = len(self._scan)
+                    break
+                if first_only:
+                    break
+            if time.perf_counter() > end:
+                break
+
+    def _search_tick(self):
+        doc = self.model.doc
+        if doc is None or getattr(doc, "is_closed", False):
+            return self._search_timer.stop()
+        self._scan_some(0.03)
+        if not self._scanning():
+            self._search_timer.stop()
+        if self.hits and self.hit_idx < 0:      # lúc bấm tìm chưa thấy gì, giờ mới thấy: tới kết quả đầu tiên
+            k = bisect.bisect_left(self.hit_pages, getattr(self, "_scan_from", 0))
+            self.hit_idx = 0 if k >= len(self.hits) else k
+            self.ensure_visible(*self.hits[self.hit_idx])
+        self.searchChanged.emit(self._search_label())
+        self.viewport().update()
+
+    def _search_label(self) -> str:
+        more = "…" if self._scanning() else ""
+        if not self.hits:
+            return "Đang tìm…" if more else "Không tìm thấy"
+        return f"{self.hit_idx + 1}/{len(self.hits)}{more}"
+
     def search(self, text: str, forward: bool = True) -> str:
+        """Tìm chữ. Tài liệu dài không bị đứng máy: tới ngay kết quả gần chỗ đang xem, các trang còn lại dò tiếp ở nền."""
         text = text.strip()
         if not text:
-            self.hits, self.hit_idx, self.query = [], -1, ""
+            self._reset_search()
             self.viewport().update()
             return ""
-        if text != self.query:
+        fresh = text != self.query
+        if fresh:
+            self._reset_search()
             self.query = text
-            self.hits = []
-            for i, page in enumerate(self.model.doc):
-                for q in page.search_for(text, quads=False):
-                    self.hits.append((i, q))
-                if len(self.hits) > 5000:
-                    break
-            self.hit_idx = -1
+            n, cur = self.model.page_count, self._cur_page
+            self._scan = list(range(cur, n)) + list(range(0, cur))      # từ trang đang xem trở đi, rồi vòng lại đầu
+            self._scan_some(0.2)                # tài liệu ngắn thì dò xong luôn trong nhịp này
+            self._scan_from = cur
+            if not forward:
+                self._scan_some(60.0)           # tìm ngược: phải dò hết mới biết kết quả đứng ngay trước
             if self.hits:  # bắt đầu từ trang đang xem
-                cur = self._cur_page
-                nxt = next((k for k, h in enumerate(self.hits) if h[0] >= cur), 0)
+                nxt = bisect.bisect_left(self.hit_pages, cur)
+                nxt = 0 if nxt >= len(self.hits) else nxt
                 self.hit_idx = nxt - 1 if forward else nxt
+            if self._scanning():
+                self._search_timer.start()
         if not self.hits:
             self.viewport().update()
-            return "Không tìm thấy"
-        self.hit_idx = (self.hit_idx + (1 if forward else -1)) % len(self.hits)
+            return self._search_label()
+        step = 1 if forward else -1
+        if self._scanning() and not 0 <= self.hit_idx + step < len(self.hits):
+            self._scan_some(60.0)               # sắp vòng qua phần chưa dò: dò nốt cho khỏi sót
+            self._search_timer.stop()
+        self.hit_idx = (self.hit_idx + step) % len(self.hits)
         pg, r = self.hits[self.hit_idx]
         self.ensure_visible(pg, r)
         self.viewport().update()
-        return f"{self.hit_idx + 1}/{len(self.hits)}"
+        return self._search_label()

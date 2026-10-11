@@ -101,7 +101,7 @@ class ThumbList(QListWidget):
         super().dropEvent(e)
         order = [self.item(i).data(Qt.UserRole) for i in range(self.count())]
         if order != sorted(order):
-            QTimer.singleShot(0, lambda: self.reordered.emit(order))
+            QTimer.singleShot(0, self, lambda: self.reordered.emit(order))
 
 
 class _ResetHandle(QSplitterHandle):
@@ -209,6 +209,21 @@ class DocTab(QWidget):
         self._sync_thumb(self.own_viewer.current_page())
         self.bookmarks.load()
 
+    def shutdown(self):
+        """Tab sắp đóng: dừng các hẹn giờ còn chờ (dựng ảnh thu nhỏ, dựng lại trang, dò bookmark) để chúng không chạy
+        trên tài liệu đã đóng."""
+        self._timer.stop()
+        self._pending = []
+        for v in (self.own_viewer, self.partner):
+            if v is not None:
+                v._rerender.stop()
+                v._lazy.stop()
+                v._search_timer.stop()
+        try:
+            self.bookmarks._follow.stop()
+        except Exception:
+            pass
+
     def _thumb(self, i: int) -> QIcon:
         page = self.own_model.doc[i]
         r = page.rect
@@ -224,8 +239,9 @@ class DocTab(QWidget):
         return QIcon(pm)
 
     def _fill_thumbs(self):
-        """Dựng dần ảnh thu nhỏ mà không làm đơ cửa sổ: mỗi nhịp chỉ làm trong khoảng 30 ms rồi nhường cho giao diện;
+        """Dựng dần ảnh thu nhỏ mà không làm đơ cửa sổ: mỗi nhịp chỉ dựng một trang rồi nhường cho giao diện;
         trang gần chỗ đang xem được dựng trước; bảng Trang đang ẩn (đang so sánh, đang ở tab Bookmark) thì tạm nghỉ."""
+        import bisect
         import time
         if not self._pending:
             self._timer.stop()
@@ -233,19 +249,19 @@ class DocTab(QWidget):
         if not self.thumbs.isVisible():
             self._timer.setInterval(500)
             return
-        self._timer.setInterval(12)
+        self._timer.setInterval(15)
+        if time.perf_counter() - self.own_viewer.last_scroll < 0.25:
+            return                              # người dùng đang cuộn: nhường hết máy cho việc vẽ trang
         cur = self.own_viewer.current_page()
-        end = time.perf_counter() + 0.03
-        while self._pending:
-            i = min(self._pending, key=lambda k: abs(k - cur))
-            self._pending.remove(i)
-            if i < self.thumbs.count():
-                try:
-                    self.thumbs.item(i).setIcon(self._thumb(i))
-                except Exception:
-                    pass
-            if time.perf_counter() > end:
-                break
+        k = bisect.bisect_left(self._pending, cur)          # _pending luôn xếp tăng dần
+        if k >= len(self._pending) or (k > 0 and cur - self._pending[k - 1] <= self._pending[k] - cur):
+            k = max(0, k - 1)
+        i = self._pending.pop(k)
+        if i < self.thumbs.count():
+            try:
+                self.thumbs.item(i).setIcon(self._thumb(i))
+            except Exception:
+                pass
 
     def _on_changed(self, page, structure):
         if page == "toc":
@@ -255,10 +271,13 @@ class DocTab(QWidget):
         if structure or page is None or self.thumbs.count() != self.own_model.page_count:
             self.rebuild()
         elif page not in self._pending:
-            self._pending.insert(0, page)
+            import bisect
+            bisect.insort(self._pending, page)
             self._timer.start()
 
     def _sync_thumb(self, i: int):
+        if self.thumbs.currentRow() == i:
+            return
         if len(self.thumbs.selectedItems()) <= 1 and 0 <= i < self.thumbs.count():
             self.thumbs.clearSelection()         # không để sót trang được chọn từ trước
             self.thumbs.setCurrentRow(i)
@@ -354,7 +373,7 @@ class DocTab(QWidget):
         other.own_model.stateChanged.connect(self._paint_heads)
         self.own_model.stateChanged.connect(self._paint_heads)
         self._paint_heads()
-        QTimer.singleShot(0, self._fit_both)
+        QTimer.singleShot(0, self, self._fit_both)
 
     def _fit_both(self):
         if self.partner is None:
@@ -824,6 +843,7 @@ class MainWindow(QMainWindow):
               "add_ai": "Chạy lại bộ cài và tích “AI dịch chạy trên máy”, hoặc cài Ollama từ ollama.com."}
         for key, fn in (("tess", tools.tess_languages), ("rapid", ocr.rapid_available),
                         ("pdf2docx", lambda: importlib.util.find_spec("pdf2docx") is not None),
+                        ("openpyxl", lambda: importlib.util.find_spec("openpyxl") is not None),
                         ("pkcs11", lambda: importlib.util.find_spec("pkcs11") is not None)):
             try:
                 st[key] = fn()
@@ -862,7 +882,7 @@ class MainWindow(QMainWindow):
                 # mỗi lần mở menu: làm mờ những mục lúc này không dùng được; đóng menu thì trả lại
                 # (để phím tắt như Ctrl+C không bị khoá theo trạng thái cũ)
                 act.menu().aboutToShow.connect(self._dim_unavailable)
-                act.menu().aboutToHide.connect(lambda: QTimer.singleShot(0, self._update_ui))
+                act.menu().aboutToHide.connect(lambda: QTimer.singleShot(0, self, self._update_ui))
 
     def _set(self, text: str, on: bool):
         for a in self.acts.get(text, []):
@@ -878,7 +898,7 @@ class MainWindow(QMainWindow):
         self.a_sync.setChecked(comparing and t.sync)
 
     def _dim_unavailable(self):
-        self.recent_menu.setEnabled(any(os.path.exists(p) for p in self.cfg.get("recent", [])))
+        self.recent_menu.setEnabled(bool(self.cfg.get("recent")))   # không dò ổ đĩa mỗi lần cập nhật giao diện
         t = self.tab()
         self._side_label()
         if not t:
@@ -1110,11 +1130,12 @@ class MainWindow(QMainWindow):
         i = self.tabs.addTab(t, model.title)
         self.tabs.setCurrentIndex(i)
         self._update_ui()
-        QTimer.singleShot(0, v.apply_zoom)
+        QTimer.singleShot(0, v, v.apply_zoom)
         return t
 
     def wire_viewer(self, t: DocTab, v: Viewer):
         v.message.connect(self.msg)
+        v.searchChanged.connect(lambda s_: self.search_lb.setText(" " + s_) if self.tab() is t and t.viewer is v else None)
         v.pageChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
         v.zoomChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
         v.toolChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
@@ -1285,6 +1306,7 @@ class MainWindow(QMainWindow):
             if x.source_tab is t:
                 x.source_tab = None
         self.tabs.removeTab(i)
+        t.shutdown()                             # dừng mọi hẹn giờ của tab trước khi đóng tài liệu
         t.own_model.close()
         t.deleteLater()
         self._update_ui()
@@ -2345,7 +2367,7 @@ class MainWindow(QMainWindow):
                          "<p style='color:#5f6368'>Mã nguồn dùng PyMuPDF (giấy phép AGPL) và pyHanko (MIT): dùng nội bộ "
                          "thoải mái, nếu phát hành cho người khác cần kèm mã nguồn.</p>")
         from .dialogs import fit_dialog, center_on_parent
-        fit_dialog(d, 720, 520)
+        fit_dialog(d, 720, 640)
         center_on_parent(d)
         d.exec()
 

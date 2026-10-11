@@ -198,7 +198,7 @@ class PreviewBox(QWidget):
         self.fit_btn.setEnabled(z != 1.0)
         self.changed.emit()
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(140, lambda: (hb.setValue(int(fx * (hb.maximum() + hb.pageStep()) - hb.pageStep() / 2)),
+        QTimer.singleShot(140, self, lambda: (hb.setValue(int(fx * (hb.maximum() + hb.pageStep()) - hb.pageStep() / 2)),
                                         vb.setValue(int(fy * (vb.maximum() + vb.pageStep()) - vb.pageStep() / 2))))
 
     # -- chuột
@@ -220,7 +220,7 @@ class PreviewBox(QWidget):
                 self.step.emit(-1 if n > 0 else 1)
                 if vb.maximum() > 0:   # sang trang mới thì bắt đầu ở đầu/cuối trang cho liền mạch
                     from PySide6.QtCore import QTimer
-                    QTimer.singleShot(160, lambda: vb.setValue(0 if n < 0 else vb.maximum()))
+                    QTimer.singleShot(160, self, lambda: vb.setValue(0 if n < 0 else vb.maximum()))
             return True
         return False
 
@@ -2020,7 +2020,7 @@ class TranslateDialog(QDialog):
     def _relayout(self):
         """Nội dung đổi làm hộp thoại đổi cỡ: giãn lại rồi đưa về giữa cửa sổ app."""
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, self._recenter)
+        QTimer.singleShot(0, self, self._recenter)
 
     def showEvent(self, e):
         super().showEvent(e)
