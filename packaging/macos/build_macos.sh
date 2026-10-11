@@ -19,7 +19,8 @@ PY="${PYTHON:-python3}"
 [ -x "$WORK/venv/bin/python" ] || "$PY" -m venv "$WORK/venv"
 VPY="$WORK/venv/bin/python"
 "$VPY" -m pip install -q --upgrade pip
-"$VPY" -m pip install -q -r "$ROOT/requirements.txt"; note "thu vien chinh: OK"
+"$VPY" -m pip install -q --only-binary=:all: cryptography      # ban co san wheel (tu build se dinh libssl cua Homebrew, xung dot voi Python)
+"$VPY" -m pip install -q --prefer-binary -r "$ROOT/requirements.txt"; note "thu vien chinh: OK ($("$VPY" -m pip list 2>/dev/null | grep -i -E '^(cryptography|opencv|onnxruntime|PySide6_Essentials|PyMuPDF) ' | tr -s ' ' | tr '\n' ',')"
 for pkg in pdf2docx python-pkcs11 rapidocr onnxruntime pyinstaller; do
   if "$VPY" -m pip install -q "$pkg"; then note "$pkg : OK"; else
     [ "$pkg" = pyinstaller ] && { echo "Khong cai duoc PyInstaller"; exit 1; }
@@ -51,6 +52,7 @@ LITEPDF_TESSDATA="$VENDOR/tessdata" LITEPDF_ICNS="$WORK/app.icns" LITEPDF_BUILD=
 APP="$WORK/dist/PDF Editor Lite.app"
 [ -x "$APP/Contents/MacOS/PDFEditorLite" ] || { echo "PyInstaller that bai"; exit 1; }
 codesign --force --deep -s - "$APP" >> "$LOG" 2>&1 || note "canh bao: ky ad-hoc khong thanh cong"
+{ echo "--- cv2 trong goi:"; ls -la "$APP/Contents/Frameworks/cv2" "$APP/Contents/Resources/cv2" 2>&1 | head -60; } >> "$LOG"
 note "dung luong .app: $(du -sm "$APP" | cut -f1) MB"
 
 step "5/7  Tu kiem tra ban dong goi"

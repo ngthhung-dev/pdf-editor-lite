@@ -24,6 +24,8 @@ def take(pkg, required=True):
 for pkg in ("pymupdf", "pymupdf_fonts", "pyhanko", "pyhanko_certvalidator", "asn1crypto", "tzlocal", "fontTools"):
     take(pkg, required=pkg in ("pymupdf", "pyhanko"))
 for pkg in ("rapidocr", "onnxruntime", "pdf2docx", "pkcs11", "docx", "cv2", "omegaconf", "pyclipper", "shapely"):
+    if pkg == "cv2" and sys.platform == "darwin":
+        continue                       # macOS: để hook chuẩn của PyInstaller lo OpenCV (gom tay làm hỏng bộ nạp của cv2 trong .app)
     take(pkg, required=False)          # phần mở rộng: thiếu thì app vẫn chạy, chỉ thiếu đúng chức năng đó
 hidden += collect_submodules("litepdf")
 datas += [(os.path.join(ROOT, "assets"), "assets")]
