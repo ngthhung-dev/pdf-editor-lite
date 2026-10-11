@@ -34,8 +34,13 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Luu tam cac file tai ve (LibreOffice...) giua cac lan build
+        uses: actions/cache@v4
+        with:
+          path: build_win/vendor/LibreOffice.msi
+          key: vendor-libreoffice-v1
       - name: Build
-        timeout-minutes: 60
+        timeout-minutes: 90
         shell: pwsh
         run: |
           $a = @()

@@ -23,7 +23,7 @@ function Step($t) {
     Write-Host ""; Write-Host "=== $t ===" -ForegroundColor Cyan
     Add-Content -Path $log -Value "$(Get-Date -Format 'HH:mm:ss')  $t" -Encoding UTF8
 }
-function Note($t) { Write-Host "  $t"; Add-Content -Path $log -Value "            $t" -Encoding UTF8 }
+function Note($t) { Write-Host "  $t"; Add-Content -Path $log -Value "  $(Get-Date -Format 'HH:mm:ss')  $t" -Encoding UTF8 }
 Set-Content -Path $log -Value "Build PDF Editor Lite - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -Encoding UTF8
 trap { Add-Content -Path $log -Value "LOI: $_" -Encoding UTF8; throw }
 function Get-File($url, $out) {
@@ -123,7 +123,9 @@ if (-not $NoLibreOffice) {
     $defs += "/DWithLO=1"
 }
 if (-not $NoOllama) {
-    Get-File "https://ollama.com/download/OllamaSetup.exe" (Join-Path $vendor "OllamaSetup.exe")
+    # Bo cai Ollama nang ~1.5 GB nen KHONG nhet vao bo cai: khi nguoi dung tich muc nay, trinh cai se tai Ollama ve (can mang).
+    # Chi tai ve may build khi can keo san model de kem theo.
+    if (-not $NoModel) { Get-File "https://ollama.com/download/OllamaSetup.exe" (Join-Path $vendor "OllamaSetup.exe") }
     $defs += "/DWithOllama=1"; $defs += "/DModel=$Model"
     if (-not $NoModel) {
         $models = Join-Path $vendor "ollama_models"

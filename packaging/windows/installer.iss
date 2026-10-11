@@ -54,7 +54,7 @@ Name: "rapid"; Description: "OCR trên máy cho ảnh chụp / scan xấu (Rapid
 Name: "lo"; Description: "LibreOffice: chuyển Word / Excel / PowerPoint sang PDF (bỏ tích nếu máy đã có Microsoft Office)"; Types: full standard
 #endif
 #ifdef WithOllama
-Name: "ollama"; Description: "AI dịch chạy ngay trên máy, không cần mạng và API key (Ollama; cần RAM từ 8 GB)"; Types: full
+Name: "ollama"; Description: "AI dịch chạy ngay trên máy, không cần API key (Ollama; TẢI VỀ khi cài ~1,5 GB; cần RAM từ 8 GB)"; Types: full
 #ifdef WithModel
 Name: "ollama\model"; Description: "Model dịch {#Model} (kèm sẵn trong bộ cài)"; Types: full
 #else
@@ -73,10 +73,9 @@ Source: "{#Work}\vendor\tessdata\*"; DestDir: "{app}\resources\tessdata"; Compon
 Source: "{#Work}\vendor\rapid\_internal\*"; DestDir: "{app}\_internal"; Components: rapid; Flags: recursesubdirs createallsubdirs ignoreversion
 #endif
 #ifdef WithLO
-Source: "{#Work}\vendor\LibreOffice.msi"; DestDir: "{tmp}"; Components: lo; Flags: deleteafterinstall
+Source: "{#Work}\vendor\LibreOffice.msi"; DestDir: "{tmp}"; Components: lo; Flags: deleteafterinstall nocompression
 #endif
 #ifdef WithOllama
-Source: "{#Work}\vendor\OllamaSetup.exe"; DestDir: "{tmp}"; Components: ollama; Flags: deleteafterinstall
 #ifdef WithModel
 Source: "{#Work}\vendor\ollama_models\*"; DestDir: "{%USERPROFILE}\.ollama\models"; Components: ollama\model; Flags: recursesubdirs createallsubdirs uninsneveruninstall onlyifdoesntexist
 #endif
@@ -115,9 +114,9 @@ Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueNa
 Filename: "msiexec.exe"; Parameters: "/i ""{tmp}\LibreOffice.msi"" /qn /norestart"; Components: lo; Check: not HasLibreOffice; StatusMsg: "Đang cài LibreOffice (mất vài phút)..."; Flags: waituntilterminated
 #endif
 #ifdef WithOllama
-Filename: "{tmp}\OllamaSetup.exe"; Parameters: "/VERYSILENT /NORESTART"; Components: ollama; Check: not HasOllama; StatusMsg: "Đang cài Ollama (AI dịch chạy trên máy)..."; Flags: waituntilterminated
+Filename: "{tmp}\OllamaSetup.exe"; Parameters: "/VERYSILENT /NORESTART"; Components: ollama; Check: OllamaDownloaded; StatusMsg: "Đang cài Ollama (AI dịch chạy trên máy)..."; Flags: waituntilterminated
 #ifndef WithModel
-Filename: "{code:OllamaExe}"; Parameters: "pull {#Model}"; Components: ollama\model; StatusMsg: "Đang tải model dịch {#Model} (vài GB, cần mạng; có thể mất khá lâu)..."; Flags: waituntilterminated runasoriginaluser
+Filename: "{code:OllamaExe}"; Parameters: "pull {#Model}"; Components: ollama\model; Check: HasOllama; StatusMsg: "Đang tải model dịch {#Model} (vài GB, cần mạng; có thể mất khá lâu)..."; Flags: waituntilterminated runasoriginaluser
 #endif
 #endif
 Filename: "{app}\{#AppExe}"; Description: "Mở {#AppName}"; Flags: nowait postinstall skipifsilent
@@ -138,3 +137,43 @@ function HasOllama(): Boolean;
 begin
   Result := FileExists(OllamaExe(''));
 end;
+
+function OllamaDownloaded(): Boolean;
+begin
+  Result := (not HasOllama()) and FileExists(ExpandConstant('{tmp}\OllamaSetup.exe'));
+end;
+
+#ifdef WithOllama
+var
+  DownloadPage: TDownloadWizardPage;
+
+function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
+begin
+  Result := True;
+end;
+
+procedure InitializeWizard;
+begin
+  DownloadPage := CreateDownloadPage('Đang tải Ollama', 'Tải bộ cài Ollama (khoảng 1,5 GB) từ ollama.com. Cần có mạng; có thể mất vài phút.', @OnDownloadProgress);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = wpReady) and WizardIsComponentSelected('ollama') and (not HasOllama()) then begin
+    DownloadPage.Clear;
+    DownloadPage.Add('https://ollama.com/download/OllamaSetup.exe', 'OllamaSetup.exe', '');
+    DownloadPage.Show;
+    try
+      try
+        DownloadPage.Download;
+      except
+        // khong tai duoc (mat mang / nguoi dung bam Huy): van cai phan con lai, chi thieu AI dich chay tren may
+        SuppressibleMsgBox('Không tải được Ollama nên sẽ bỏ qua phần "AI dịch chạy trên máy". Các phần khác vẫn được cài bình thường.' + #13#10 + #13#10 + 'Có thể chạy lại bộ cài này khi có mạng để thêm sau.', mbInformation, MB_OK, IDOK);
+      end;
+    finally
+      DownloadPage.Hide;
+    end;
+  end;
+end;
+#endif
