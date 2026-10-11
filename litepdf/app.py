@@ -1374,11 +1374,18 @@ class MainWindow(QMainWindow):
     def save_as(self, t):
         self._save(t, None)
 
+    def _drop_picks(self, t):
+        for v in (t.own_viewer, t.partner):      # ghi chú đang chọn có thể không còn sau khi hoàn tác / làm lại
+            if v is not None:
+                v.annot = None
+
     def undo(self, t):
+        self._drop_picks(t)
         if t.model.undo():
             self.msg("Đã hoàn tác")
 
     def redo(self, t):
+        self._drop_picks(t)
         if t.model.redo():
             self.msg("Đã làm lại")
 
@@ -2415,6 +2422,40 @@ def selftest(out: str | None = None) -> int:
         return out_
     if rep.get("rapidocr") is True:
         probe("rapidocr_run", rapid)
+    def undo_incr():
+        """Hoàn tác kiểu "nối đuôi" của file lớn: thử thật trên máy này (cắt / nối file tạm khi tài liệu vừa đóng)."""
+        from . import viewer as V
+        d = pymupdf.open()
+        for k in range(3):
+            d.new_page().insert_text((72, 100), f"Trang {k + 1}", fontsize=20)
+        old, V.INCR_MIN = V.INCR_MIN, 0
+        try:
+            m = V.DocModel(d.tobytes(), None)
+            mode = bool(m._work)
+            count = lambda: [len(list(pg.annots())) for pg in m.doc]
+            seen = [count()]
+            for k in range(3):
+                with m.edit(k):
+                    m.doc[k].add_rect_annot((50, 50, 150, 120))
+                seen.append(count())
+            with m.edit(structure=True):
+                m.doc.delete_page(0)
+            seen.append(count())
+            back = []
+            while m.undo():
+                back.append(count())
+            fwd = []
+            while m.redo():
+                fwd.append(count())
+            still = bool(m._work)
+            files = list(m._files)
+            m.close()
+            ok = back == seen[-2::-1] and fwd == seen[1:]
+            return {"che_do_noi_duoi": mode, "van_noi_duoi_sau_hoan_tac": still, "dung": ok,
+                    "file_tam_da_xoa": not any(os.path.exists(f) for f in files)}
+        finally:
+            V.INCR_MIN = old
+    probe("hoan_tac_file_lon", undo_incr)
     text = json.dumps(rep, ensure_ascii=False, indent=1)
     if out:
         with open(out, "w", encoding="utf-8") as f:

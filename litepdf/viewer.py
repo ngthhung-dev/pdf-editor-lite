@@ -39,8 +39,41 @@ def _user_name() -> str:
         return ""
 
 
+INCR_MIN = int(os.environ.get("LITEPDF_INCR_MIN", 4_000_000))   # file từ cỡ này trở lên dùng cách hoàn tác "nối đuôi"
+_work_root: str | None = None
+
+
+def _work_dir() -> str:
+    """Thư mục chứa bản làm việc tạm của các tài liệu lớn (xoá khi đóng tài liệu / thoát app)."""
+    global _work_root
+    if _work_root is None:
+        import atexit
+        import time as _t
+        base = os.path.join(tempfile.gettempdir(), "PDFEditorLite-work")
+        os.makedirs(base, exist_ok=True)
+        try:        # dọn phần sót lại của những lần app bị tắt đột ngột
+            for name in os.listdir(base):
+                d = os.path.join(base, name)
+                if os.path.isdir(d) and _t.time() - os.path.getmtime(d) > 2 * 86400:
+                    shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+        _work_root = tempfile.mkdtemp(prefix="p%d-" % os.getpid(), dir=base)
+        atexit.register(lambda: shutil.rmtree(_work_root, ignore_errors=True))
+    return _work_root
+
+
 class DocModel(QObject):
-    """Tài liệu PDF giữ trong bộ nhớ, có hoàn tác/làm lại."""
+    """Tài liệu PDF đang mở, có hoàn tác/làm lại.
+
+    Hai cách giữ điểm hoàn tác:
+    - File nhỏ: chụp lại cả tài liệu vào bộ nhớ trước mỗi thao tác (đơn giản, tốn vài ms).
+    - File lớn (từ INCR_MIN): tài liệu được mở từ một bản làm việc tạm trên đĩa; sau mỗi thao tác chỉ phần thay đổi
+      được ghi nối vào cuối file (PDF cho phép lưu "nối đuôi"). Điểm hoàn tác chỉ là độ dài file trước thao tác:
+      hoàn tác = cắt file về độ dài đó rồi mở lại; làm lại = nối lại đúng đoạn đuôi đã cắt. Mỗi thao tác mất vài chục ms
+      dù file hàng trăm MB, thay vì phải chép lại cả file. Lưu ý: sau mỗi thao tác `self.doc` là một đối tượng MỚI
+      (mở lại từ file), nên mã bên ngoài không được giữ doc / page / annot cũ qua một lần sửa: luôn lấy lại từ model.doc.
+    Một mục trong ngăn hoàn tác là: bytes (ảnh chụp cả tài liệu) | ("w", file, độ dài) | ("t", file, độ dài, đuôi)."""
     changed = Signal(object, bool)  # (chỉ số trang hoặc None, cấu trúc trang thay đổi)
     stateChanged = Signal()
 
@@ -55,8 +88,12 @@ class DocModel(QObject):
         self.title = title or (os.path.basename(path) if path else "Chưa đặt tên.pdf")
         self.dirty = path is None
         self.fonts_added = False
-        self.undo_stack: list[bytes] = []
-        self.redo_stack: list[bytes] = []
+        self.undo_stack: list = []
+        self.redo_stack: list = []
+        self._work: list | None = None          # [file tạm, độ dài hiện tại] khi đang dùng cách "nối đuôi"
+        self._files: list[str] = []
+        if not self.encrypted:                  # file có mật khẩu: không ghi bản đã giải mã ra đĩa
+            self._start_work(data)
 
     # -- truy cập
     @property
@@ -66,21 +103,128 @@ class DocModel(QObject):
     def page(self, i: int, for_edit: bool = False):
         return self.doc[i]
 
-    def _snapshot(self) -> bytes:
-        return self.doc.tobytes()
-
-    def _push(self, stack: list[bytes], snap: bytes) -> None:
-        stack.append(snap)
-        limit = 3 if len(snap) > 60_000_000 else 20
-        while len(stack) > limit or (len(stack) > 2 and sum(map(len, stack)) > 400_000_000):
-            stack.pop(0)
-
-    def _reopen(self, data: bytes) -> None:
+    # -- bản làm việc trên đĩa (file lớn)
+    def _start_work(self, data: bytes) -> bool:
+        """Chuyển tài liệu hiện tại (đúng bằng `data`) sang mở từ file tạm. Không hợp thì giữ nguyên cách cũ."""
+        if len(data) < INCR_MIN:
+            return False
+        path = None
+        try:
+            fd, path = tempfile.mkstemp(suffix=".pdf", dir=_work_dir())
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            doc = pymupdf.open(path)
+            if doc.needs_pass or doc.is_encrypted or not doc.can_save_incrementally():
+                doc.close()
+                raise ValueError("không lưu nối đuôi được")
+        except Exception:
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            return False
         try:
             self.doc.close()
         except Exception:
             pass
-        self.doc = pymupdf.open(stream=data, filetype="pdf")
+        self.doc = doc
+        self._work = [path, len(data)]
+        self._files.append(path)
+        return True
+
+    def _commit(self) -> bool:
+        """Ghi phần vừa thay đổi nối vào cuối bản làm việc."""
+        path = self._work[0]
+        try:
+            self.doc.saveIncr()
+        except Exception:
+            return False
+        # Mở lại tài liệu từ chính file vừa ghi. Bắt buộc: nếu giữ nguyên tài liệu đang mở, lần ghi sau thư viện sẽ ghi đè
+        # lên phần đuôi của lần này (nó luôn ghi lại mọi thay đổi kể từ lúc mở), khi đó không cắt về đúng điểm này được.
+        try:
+            size = os.path.getsize(path)
+            doc = pymupdf.open(path)
+        except Exception:
+            self._work = None                    # tài liệu đang mở vẫn dùng được; từ đây chụp cả tài liệu như file nhỏ
+            return True
+        try:
+            self.doc.close()
+        except Exception:
+            pass
+        self.doc = doc
+        self._work[1] = size
+        return True
+
+    def _prefix(self, path: str, length: int) -> bytes:
+        with open(path, "rb") as f:
+            return f.read(length)
+
+    def _open_work(self, path: str, length: int, tail: bytes = b"") -> None:
+        """Mở tài liệu ở trạng thái: `length` byte đầu của file (+ đoạn đuôi nối thêm, nếu có)."""
+        try:
+            self.doc.close()
+        except Exception:
+            pass
+        try:
+            if os.path.getsize(path) != length:
+                os.truncate(path, length)
+            if tail:
+                with open(path, "ab") as f:
+                    f.write(tail)
+            self.doc = pymupdf.open(path)
+            self._work = [path, length + len(tail)]
+        except Exception:
+            # Không cắt/nối được file tạm (bị chương trình khác giữ...): dựng đúng trạng thái đó trong bộ nhớ
+            self._work = None
+            self.doc = pymupdf.open(stream=self._prefix(path, length) + tail, filetype="pdf")
+
+    def _snapshot(self):
+        """Điểm hoàn tác của trạng thái hiện tại."""
+        if self._work:
+            return ("w", self._work[0], self._work[1])
+        return self.doc.tobytes()
+
+    @staticmethod
+    def _weight(e) -> int:
+        return len(e) if isinstance(e, bytes) else (len(e[3]) if e[0] == "t" else 0)
+
+    def _push(self, stack: list, snap, page=None, structure: bool = True) -> None:
+        """Mỗi mục trong ngăn: (điểm hoàn tác, trang bị đụng tới, có đổi cấu trúc trang không). Hai thông tin sau để khi
+        hoàn tác chỉ phải vẽ lại đúng trang đó, không dựng lại cả tài liệu."""
+        stack.append((snap, page, structure))
+        big = self._weight(snap) > 60_000_000
+        while len(stack) > (3 if big else 200) or \
+                (len(stack) > 2 and sum(self._weight(e[0]) for e in stack) > 400_000_000):
+            stack.pop(0)
+
+    def _reopen(self, snap) -> None:
+        """Đưa tài liệu về trạng thái `snap` (không ghi nhận gì vào ngăn hoàn tác)."""
+        if isinstance(snap, bytes):
+            try:
+                self.doc.close()
+            except Exception:
+                pass
+            self._work = None
+            self.doc = pymupdf.open(stream=snap, filetype="pdf")
+        elif snap[0] == "w":
+            self._open_work(snap[1], snap[2])
+        else:
+            self._open_work(snap[1], snap[2], snap[3])
+
+    def _switch(self, target):
+        """Chuyển sang trạng thái `target`; trả về mục để quay lại trạng thái vừa rời."""
+        cur = self._work
+        if not isinstance(target, bytes) and cur and target[1] == cur[0] and target[0] == "w" and target[2] < cur[1]:
+            with open(cur[0], "rb") as f:        # cùng một file: giữ lại đoạn đuôi sắp cắt để còn làm lại được
+                f.seek(target[2])
+                left = ("t", cur[0], target[2], f.read(cur[1] - target[2]))
+        elif not isinstance(target, bytes) and target[0] == "t":
+            left = ("w", target[1], target[2])
+        else:
+            left = self._snapshot()
+        self._reopen(target)
+        return left
 
     @contextmanager
     def edit(self, page: int | None = None, structure: bool = False):
@@ -97,7 +241,11 @@ class DocModel(QObject):
                 tools.style_notes(self.doc[page])      # ghi chú vừa tạo/sửa: dùng biểu tượng bong bóng thay cho ô vuông mặc định
             except Exception:
                 pass
-        self._push(self.undo_stack, snap)
+        if self._work and not self._commit():
+            # không ghi nối đuôi được: từ đây quay về cách chụp cả tài liệu, điểm hoàn tác lấy từ phần file chưa đụng tới
+            snap = self._prefix(snap[1], snap[2])
+            self._work = None
+        self._push(self.undo_stack, snap, page, structure)
         self.redo_stack.clear()
         self.dirty = True
         self.changed.emit(page, structure)
@@ -106,7 +254,13 @@ class DocModel(QObject):
     def replace_document(self, data: bytes) -> None:
         """Thay toàn bộ tài liệu (nén, OCR...) như một thao tác có thể hoàn tác."""
         snap = self._snapshot()
-        self._reopen(data)
+        try:
+            self.doc.close()
+        except Exception:
+            pass
+        self._work = None
+        self.doc = pymupdf.open(stream=data, filetype="pdf")
+        self._start_work(data)
         self._push(self.undo_stack, snap)
         self.redo_stack.clear()
         self.dirty = True
@@ -116,20 +270,20 @@ class DocModel(QObject):
     def undo(self) -> bool:
         if not self.undo_stack:
             return False
-        self._push(self.redo_stack, self._snapshot())
-        self._reopen(self.undo_stack.pop())
+        snap, page, structure = self.undo_stack.pop()
+        self._push(self.redo_stack, self._switch(snap), page, structure)
         self.dirty = True
-        self.changed.emit(None, True)
+        self.changed.emit(page, structure)
         self.stateChanged.emit()
         return True
 
     def redo(self) -> bool:
         if not self.redo_stack:
             return False
-        self.undo_stack.append(self._snapshot())
-        self._reopen(self.redo_stack.pop())
+        snap, page, structure = self.redo_stack.pop()
+        self._push(self.undo_stack, self._switch(snap), page, structure)
         self.dirty = True
-        self.changed.emit(None, True)
+        self.changed.emit(page, structure)
         self.stateChanged.emit()
         return True
 
@@ -183,6 +337,13 @@ class DocModel(QObject):
             self.doc.close()
         except Exception:
             pass
+        for f in self._files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+        self._files = []
+        self._work = None
 
 
 class Viewer(QGraphicsView):
