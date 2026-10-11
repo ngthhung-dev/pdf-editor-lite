@@ -854,7 +854,8 @@ def text_runs(d: dict) -> list[dict]:
     def start(s, dr):
         runs.append({"bbox": pymupdf.Rect(s["bbox"]), "text": s["text"], "origin": pymupdf.Point(s["origin"]),
                      "size": s["size"], "color": _rgb(s["color"]), "font": s["font"], "flags": s["flags"], "dir": dr,
-                     "_parts": {style_of(s): [len(s["text"]), s]}})
+                     "_parts": {style_of(s): [len(s["text"]), s]},
+                     "segs": [[s["text"], bool(s["flags"] & 16), bool(s["flags"] & 2), _rgb(s["color"])]]})
     for s, dr in horiz:
         r = runs[-1] if runs else None
         # Nối theo DÒNG nhìn thấy trên trang: cùng hàng, cỡ chữ gần bằng nhau, đứng sát nhau. Chữ đậm / nghiêng / khác màu
@@ -866,6 +867,11 @@ def text_runs(d: dict) -> list[dict]:
                 glue = "" if r["text"].endswith(" ") or s["text"].startswith(" ") or gap < 0.18 * s["size"] else " "
                 r["text"] += glue + s["text"]
                 r["bbox"] |= pymupdf.Rect(s["bbox"])
+                seg = [glue + s["text"], bool(s["flags"] & 16), bool(s["flags"] & 2), _rgb(s["color"])]
+                if r["segs"][-1][1:] == seg[1:]:
+                    r["segs"][-1][0] += seg[0]            # cùng kiểu với mẩu trước: gộp lại
+                else:
+                    r["segs"].append(seg)
                 part = r["_parts"].setdefault(style_of(s), [0, s])
                 part[0] += len(s["text"])
                 continue
@@ -879,6 +885,8 @@ def text_runs(d: dict) -> list[dict]:
         start(s, dr)
     for r in runs:
         r["text"] = r["text"].rstrip()
+        r["segs"][-1][0] = r["segs"][-1][0].rstrip()
+        r["segs"] = [tuple(x) for x in r["segs"] if x[0]]
     d["_runs"] = runs
     return runs
 
@@ -910,32 +918,30 @@ def text_runs_in(page, rect, d: dict | None = None) -> list[dict]:
     return out
 
 
-def replace_text_runs(page, runs: list[dict], lines: list[str], size: float | None = None, color=None,
-                      bold=None, italic=None) -> str:
-    """Sửa cả vùng: dòng thứ k trong `lines` thay cho dòng chữ thứ k trong `runs` (giữ đúng vị trí, phông, cỡ của dòng đó).
-    Ít dòng hơn thì các dòng thừa bị xoá; nhiều dòng hơn thì viết tiếp xuống dưới dòng cuối.
-    Dòng nào dài quá bề rộng cột thì tự xuống dòng và đẩy phần bên dưới xuống (xem replace_text_run_wrapped)."""
+def replace_text_runs(page, runs: list[dict], lines: list, size: float | None = None) -> str:
+    """Sửa cả vùng: dòng thứ k trong `lines` thay cho dòng chữ thứ k trong `runs` (giữ đúng vị trí, cỡ của dòng đó).
+    Mỗi dòng là chuỗi thường hoặc danh sách mẩu nhiều kiểu. Ít dòng hơn thì các dòng thừa bị xoá; nhiều dòng hơn thì viết
+    tiếp xuống dưới dòng cuối. Dòng không đổi gì thì để nguyên chữ gốc. Dòng dài quá thì tự xuống dòng."""
     used = ""
+    as_segs = lambda run, x: plain_segs(run, x) if isinstance(x, str) else [tuple(v) for v in x]
     if runs and len(lines) > len(runs):
         last = runs[-1]
         ys = sorted({round(r["origin"].y, 1) for r in runs})
         pitch = (ys[-1] - ys[0]) / (len(ys) - 1) if len(ys) > 1 else 1.25 * last["size"]
         pitch = max(pitch, 1.05 * (size or last["size"]))
-        for n, text in enumerate(lines[len(runs):], 1):
-            if not text.strip():
+        for n, line in enumerate(lines[len(runs):], 1):
+            segs = as_segs(last, line)
+            if not segs_text(segs).strip():
                 continue
-            font = pick_font(last["font"], last["flags"], text, bold=bold, italic=italic)
-            tw = pymupdf.TextWriter(page.rect, color=color if color is not None else last["color"])
-            tw.append(pymupdf.Point(last["origin"].x, last["origin"].y + n * pitch), text, font=font,
-                      fontsize=size or last["size"])
-            tw.write_text(page, overlay=True)
-            used = used or font.name
+            pieces = rich_lines(last, segs, size or last["size"], None)[0]
+            used = write_pieces(page, pymupdf.Point(last["origin"].x, last["origin"].y + n * pitch), pieces,
+                                size or last["size"]) or used
     for k in range(len(runs) - 1, -1, -1):       # từ dưới lên: đẩy nội dung bên dưới không làm lệch các dòng phía trên
         run = runs[k]
-        new = lines[k] if k < len(lines) else ""
-        if new.strip() == run["text"].strip() and size is None and color is None and bold is None and italic is None:
-            continue                         # dòng không đổi gì: để nguyên chữ gốc (giữ đúng phông, chữ đậm trong dòng)
-        name, _n = replace_text_run_wrapped(page, run, new, size, color, bold=bold, italic=italic)
+        segs = as_segs(run, lines[k]) if k < len(lines) else []
+        if size is None and _norm_segs(run.get("segs", [])) == _norm_segs(segs):
+            continue                             # dòng không đổi gì: để nguyên chữ gốc
+        name, _n = replace_text_run_wrapped(page, run, segs, size)
         used = used or name
     return used
 
@@ -1026,8 +1032,14 @@ def line_frame(page, run: dict, d: dict | None = None) -> tuple[float, float]:
         ov = min(b.x1, rb.x1) - max(b.x0, rb.x0)
         if ov > 0.5 * min(b.width, rb.width) and abs(r["origin"].y - base) <= 14 * size:
             mates.append(r)
-    near = sorted(abs(r["origin"].y - base) for r in mates if 0.9 * size <= abs(r["origin"].y - base) <= 2.4 * size)
-    pitch = near[0] if near else 1.25 * size
+    near = sorted(abs(r["origin"].y - base) for r in mates if 0.9 * size <= abs(r["origin"].y - base) <= 1.9 * size)
+    if near:
+        pitch = near[0]
+    else:        # dòng đứng một mình: lấy khoảng cách dòng phổ biến của chữ cùng cỡ trên trang
+        same = sorted((r for r in text_runs(d) if 0.95 <= r["size"] / size <= 1.05), key=lambda r: (round(r["bbox"].x0), r["origin"].y))
+        gaps = sorted(round(q["origin"].y - p["origin"].y, 1) for p, q in zip(same, same[1:])
+                      if abs(p["bbox"].x0 - q["bbox"].x0) < 1 and 1.0 * size <= q["origin"].y - p["origin"].y <= 1.9 * size)
+        pitch = gaps[len(gaps) // 2] if gaps else 1.3 * size
     # chỉ tính các dòng liền mạch với dòng này (cách nhau đều theo khoảng cách dòng), không lấy nhầm đoạn văn khác
     chain = {round(base, 1)}
     for sign in (1, -1):
@@ -1058,7 +1070,7 @@ def line_frame(page, run: dict, d: dict | None = None) -> tuple[float, float]:
     return max(limit, b.x1), pitch
 
 
-def shift_below(page, prev_bottom: float, delta: float, d: dict | None = None) -> None:
+def shift_below(page, prev_bottom: float, delta: float, d: dict | None = None, cut: float | None = None) -> None:
     """Đẩy mọi thứ nằm dưới mức `prev_bottom` của trang xuống `delta` điểm để lấy chỗ cho dòng chữ mới
     (chữ, hình, bảng, nét kẻ bên dưới giữ nguyên dạng; nét kẻ dọc và nền ô bảng được kéo dài qua khoảng trống mới)."""
     doc = page.parent
@@ -1070,7 +1082,11 @@ def shift_below(page, prev_bottom: float, delta: float, d: dict | None = None) -
     runs = text_runs(d)
     below = [r for r in runs if r["bbox"].y0 >= prev_bottom - 0.35 * r["size"] and r["origin"].y > prev_bottom]
     next_top = min((r["bbox"].y0 for r in below), default=H)
-    cut = prev_bottom + 0.6 if next_top - prev_bottom >= 1.2 else (prev_bottom + max(prev_bottom, next_top)) / 2
+    if cut is None:
+        cut = prev_bottom + 0.6 if next_top - prev_bottom >= 1.2 else (prev_bottom + max(prev_bottom, next_top)) / 2
+    else:                                        # cắt tại mức cho sẵn (lề dưới của một hàng trong bảng: không có chữ ở đó)
+        next_top = cut + 0.4
+        prev_bottom = cut - 0.4
     # Phần chân trang (số trang, dòng chân trang) đứng yên; chỉ phần thân bên dưới dòng đang sửa mới bị đẩy xuống.
     items = []
     for kind, bb in page.get_bboxlog():
@@ -1117,14 +1133,23 @@ def shift_below(page, prev_bottom: float, delta: float, d: dict | None = None) -
     plans = [(0, [pymupdf.Rect(0, prev_bottom + 0.3, W, H)]),
              (1, [pymupdf.Rect(0, 0, W, next_top - 0.3)] + ([pymupdf.Rect(0, floor, W, H)] if has_foot else [])),
              (2, [full])] + ([(3, [pymupdf.Rect(0, 0, W, floor)])] if has_foot else [])
+    # nét kẻ / hình chỉ được gỡ khi nằm hẳn về phía bên kia của mức cắt (khung gỡ chữ thì rộng hơn một chút để bắt trọn dòng)
+    gfx = {0: [pymupdf.Rect(0, cut + 0.2, W, H)],
+           1: [pymupdf.Rect(0, 0, W, cut - 0.2)] + ([pymupdf.Rect(0, floor, W, H)] if has_foot else []),
+           3: [pymupdf.Rect(0, 0, W, floor)]}
     for k, rects in plans:
         tp = tmp[k]
         for rect in rects:
             if not rect.is_empty:
                 tp.add_redact_annot(rect, fill=False, cross_out=False)
-        tp.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE if k == 2 else img_mode,
-                            graphics=pymupdf.PDF_REDACT_LINE_ART_NONE if k == 2 else pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED,
+        tp.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
                             text=pymupdf.PDF_REDACT_TEXT_REMOVE)
+        for rect in gfx.get(k, []):
+            if not rect.is_empty:
+                tp.add_redact_annot(rect, fill=False, cross_out=False)
+        if k in gfx:
+            tp.apply_redactions(images=img_mode, graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED,
+                                text=pymupdf.PDF_REDACT_TEXT_NONE)
     doc.xref_set_key(page.xref, "Contents", "null")
     doc.xref_set_key(page.xref, "Resources", "<<>>")
     top, mid = pymupdf.Rect(0, 0, W, cut), pymupdf.Rect(0, cut, W, floor - delta)
@@ -1166,38 +1191,232 @@ def shift_below(page, prev_bottom: float, delta: float, d: dict | None = None) -
                      "quá phức tạp). Hãy rút ngắn câu, hoặc dùng Xoá trắng một vùng + Thêm chữ.")
 
 
-def replace_text_run_wrapped(page, run: dict, new_text: str, size: float | None = None, color=None,
+def plain_segs(run: dict, text: str, color=None, bold=None, italic=None) -> list[tuple]:
+    """Một dòng chữ thường (một kiểu) dưới dạng danh sách mẩu: [(chữ, đậm, nghiêng, màu)]."""
+    return [(text, bool(run["flags"] & 16) if bold is None else bool(bold),
+             bool(run["flags"] & 2) if italic is None else bool(italic), color if color is not None else run["color"])]
+
+
+def _norm_segs(segs) -> list[tuple]:
+    """Dạng chuẩn để so hai dòng nhiều kiểu chữ: gộp mẩu liền nhau cùng kiểu, bỏ khoảng trắng đầu/cuối, làm tròn màu."""
+    out: list[list] = []
+    for text, b, i, col in segs:
+        key = [bool(b), bool(i), tuple(round(float(v) * 255) for v in col)]
+        if out and out[-1][1:] == key:
+            out[-1][0] += text
+        elif text:
+            out.append([text] + key)
+    if out:
+        out[0][0] = out[0][0].lstrip()
+        out[-1][0] = out[-1][0].rstrip()
+    return [tuple(x) for x in out if x[0]]
+
+
+def segs_text(segs) -> str:
+    return "".join(x[0] for x in segs)
+
+
+def rich_lines(run: dict, segs: list[tuple], size: float, width: float | None) -> list[list[tuple]]:
+    """Dàn các mẩu chữ nhiều kiểu thành các dòng không rộng quá `width` (None = một dòng).
+    Mỗi dòng: [(chữ, phông, màu), ...] viết nối tiếp nhau từ trái sang."""
+    fonts: dict = {}
+
+    def font_of(b, i, text):
+        key = (b, i)
+        if key not in fonts or not all(fonts[key].has_glyph(ord(c)) for c in text if not c.isspace()):
+            fonts[key] = pick_font(run["font"], run["flags"], text, bold=b, italic=i)
+        return fonts[key]
+    words: list[list[tuple]] = []        # mỗi từ = các mẩu dính liền nhau (một từ có thể nửa đậm nửa thường)
+    cur: list[tuple] = []
+    for text, b, i, col in segs:
+        for part in re.split(r"(\s+)", text):
+            if not part:
+                continue
+            if part.isspace():
+                if cur:
+                    words.append(cur)
+                    cur = []
+            else:
+                cur.append((part, font_of(b, i, part), col, b, i))
+    if cur:
+        words.append(cur)
+    lines: list[list[tuple]] = [[]]
+    x = 0.0
+    space = font_of(False, False, " ").text_length(" ", fontsize=size)
+    for w in words:
+        wlen = sum(f.text_length(t, fontsize=size) for t, f, _c, _b, _i in w)
+        if lines[-1] and width is not None and x + space + wlen > width + 0.6:
+            lines.append([])
+            x = 0.0
+        if lines[-1]:
+            last = lines[-1][-1]
+            # khoảng trắng mang kiểu của mẩu đứng trước nó
+            lines[-1][-1] = (last[0] + " ", last[1], last[2])
+            x += last[1].text_length(" ", fontsize=size)
+        for t, f, c, _b, _i in w:
+            if lines[-1] and lines[-1][-1][1] is f and lines[-1][-1][2] == c:
+                lines[-1][-1] = (lines[-1][-1][0] + t, f, c)
+            else:
+                lines[-1].append((t, f, c))
+        x += wlen
+    return [ln for ln in lines if ln] or [[]]
+
+
+def write_pieces(page, origin, pieces: list[tuple], size: float) -> str:
+    """Viết một dòng gồm nhiều mẩu (chữ, phông, màu) nối tiếp nhau. Trả về tên phông đầu tiên đã dùng."""
+    x, y = origin.x, origin.y
+    by_color: dict = {}
+    name = ""
+    for text, font, col in pieces:
+        tw = by_color.setdefault(tuple(col), pymupdf.TextWriter(page.rect, color=col))
+        tw.append(pymupdf.Point(x, y), text, font=font, fontsize=size)
+        x += font.text_length(text, fontsize=size)
+        name = name or font.name
+    for tw in by_color.values():
+        tw.write_text(page, overlay=True)
+    return name
+
+
+def cell_of(page, bbox) -> dict | None:
+    """Ô bảng chứa dòng chữ (dựa vào các nét kẻ quanh nó): {"x0","x1","top","bottom"} hoặc None nếu không nằm trong bảng."""
+    b = pymupdf.Rect(bbox)
+    W = page.rect.width
+    vs, hs = [], []
+    try:
+        for g in page.get_drawings():
+            r = pymupdf.Rect(g["rect"])
+            if r.width <= 2.5 and r.height >= 6:
+                vs.append(r)
+            elif r.height <= 2.5 and r.width >= 6:
+                hs.append(r)
+            elif r.width > 6 and r.height > 6 and g.get("type") in ("s", "fs"):      # khung chữ nhật có viền: bốn cạnh là nét kẻ
+                vs += [pymupdf.Rect(r.x0, r.y0, r.x0, r.y1), pymupdf.Rect(r.x1, r.y0, r.x1, r.y1)]
+                hs += [pymupdf.Rect(r.x0, r.y0, r.x1, r.y0), pymupdf.Rect(r.x0, r.y1, r.x1, r.y1)]
+    except Exception:
+        return None
+    left = [r.x1 for r in vs if r.x1 <= b.x0 + 1 and r.y0 <= b.y0 + 2 and r.y1 >= b.y1 - 2]
+    right = [r.x0 for r in vs if r.x0 >= b.x1 - 1 and r.y0 <= b.y0 + 2 and r.y1 >= b.y1 - 2]
+    if not left and not right:
+        return None
+    x0, x1 = (max(left) if left else 0.0), (min(right) if right else W)
+    span = lambda r: min(r.x1, x1) - max(r.x0, x0) >= 0.8 * (x1 - x0)
+    below = [r.y0 for r in hs if r.y0 >= b.y1 - 1 and span(r)]
+    above = [r.y1 for r in hs if r.y1 <= b.y0 + 1 and span(r)]
+    if not below:
+        return None
+    return {"x0": x0, "x1": x1, "bottom": min(below), "top": max(above) if above else None}
+
+
+def _same_rows(a, b, x0: int, x1: int, ya: int, yb: int, rows: int) -> float:
+    """Tỉ lệ số hàng điểm ảnh khác nhau giữa hai ảnh (cột x0..x1; hàng ya.. của a so với yb.. của b)."""
+    n = a.n
+    sa, sb = a.samples, b.samples
+    bad = total = 0
+    for k in range(0, max(0, rows), 2):
+        ra = sa[(ya + k) * a.stride + x0 * n:(ya + k) * a.stride + x1 * n]
+        rb = sb[(yb + k) * b.stride + x0 * n:(yb + k) * b.stride + x1 * n]
+        total += 1
+        if ra != rb and sum(abs(p - q) for p, q in zip(ra[::7], rb[::7])) > 0.02 * 255 * max(1, len(ra[::7])):
+            bad += 1
+    return bad / max(1, total)
+
+
+def shift_in_box(page, x0: float, x1: float, cut: float, floor: float, delta: float) -> None:
+    """Đẩy riêng phần nằm trong khung x0..x1, từ mức `cut` tới `floor`, xuống `delta` điểm; mọi thứ ngoài khung đứng yên.
+    Dùng cho ô bảng: chỉ các dòng còn lại của chính ô đó bị đẩy, ô bên cạnh không bị đụng tới."""
+    doc = page.parent
+    W, H = page.rect.width, page.rect.height
+    box = pymupdf.Rect(x0, cut, x1, floor)
+    runs = text_runs(text_dict(page))
+    inside = [r for r in runs if r["bbox"].intersects(box) and r["origin"].y > cut]
+    if not inside:
+        return
+    if any(r["bbox"].x0 < x0 - 0.5 or r["bbox"].x1 > x1 + 0.5 for r in inside):
+        raise NoRoom("Chữ ở ô này tràn sang ô bên cạnh nên app không đẩy riêng trong ô được.")
+    if max(r["bbox"].y1 for r in inside) + delta > floor + 0.5:
+        raise NoRoom("Ô này không còn đủ chỗ để đẩy các dòng bên dưới xuống.")
+    if any(an.rect.intersects(box) for an in (page.annots() or [])) or any(w.rect.intersects(box) for w in (page.widgets() or [])):
+        raise NoRoom("Trong ô này có ghi chú / ô biểu mẫu nên app không tự đẩy nội dung xuống được.")
+    next_top = min(r["bbox"].y0 for r in inside)
+    z = max(1, round(delta * 0.8)) / delta
+    before = page.get_pixmap(matrix=pymupdf.Matrix(z, z), alpha=False, annots=False)
+    tmp = pymupdf.open()
+    for _ in range(2):
+        tmp.insert_pdf(doc, from_page=page.number, to_page=page.number, annots=False, links=False, widgets=False)
+    # bản 0 (đứng yên): gỡ chữ của phần sẽ bị đẩy; bản 1 (bị đẩy): chỉ giữ chữ của phần đó
+    stay, move = tmp[0], tmp[1]
+    stay.add_redact_annot(pymupdf.Rect(x0, next_top + 0.3, x1, floor), fill=False, cross_out=False)
+    stay.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED,
+                          text=pymupdf.PDF_REDACT_TEXT_REMOVE)
+    for rect in (pymupdf.Rect(0, 0, W, next_top - 0.3), pymupdf.Rect(0, floor, W, H),
+                 pymupdf.Rect(0, 0, x0, H), pymupdf.Rect(x1, 0, W, H)):
+        if not rect.is_empty:
+            move.add_redact_annot(rect, fill=False, cross_out=False)
+    move.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE, graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
+                          text=pymupdf.PDF_REDACT_TEXT_REMOVE)
+    doc.xref_set_key(page.xref, "Contents", "null")
+    doc.xref_set_key(page.xref, "Resources", "<<>>")
+    page.show_pdf_page(page.rect, tmp, 0)
+    src = pymupdf.Rect(x0, cut, x1, floor - delta)
+    page.show_pdf_page(src + (0, delta, 0, delta), tmp, 1, clip=src)
+    tmp.close()
+    after = page.get_pixmap(matrix=pymupdf.Matrix(z, z), alpha=False, annots=False)
+    xa, xb, yc, yf, sh = int(x0 * z) + 2, int(x1 * z) - 2, int(cut * z), int(floor * z), int(round(delta * z))
+    wpx = before.width
+    if _same_rows(before, after, 0, wpx, 0, 0, yc - 2) > 0.02 or _same_rows(before, after, 0, wpx, yf + 3, yf + 3, before.height - yf - 5) > 0.02 \
+            or _same_rows(before, after, 0, max(0, xa - 4), yc, yc, yf - yc) > 0.02 \
+            or _same_rows(before, after, min(wpx, xb + 4), wpx, yc, yc, yf - yc) > 0.02 \
+            or _same_rows(before, after, xa, xb, yc + 3, yc + 3 + sh, yf - sh - yc - 8) > 0.06:
+        raise NoRoom("Không đẩy riêng được các dòng trong ô này (bố cục quá phức tạp).")
+
+
+def replace_text_run_wrapped(page, run: dict, new, size: float | None = None, color=None,
                              bold=None, italic=None) -> tuple[str, int]:
-    """Như replace_text_run, nhưng chữ mới dài quá bề rộng của cột thì tự xuống dòng (đúng khoảng cách dòng của đoạn),
-    và phần nội dung bên dưới được đẩy xuống tương ứng. Trả về (tên phông, số dòng đã viết).
-    Không đẩy được thì báo NoRoom và trang giữ nguyên (do model.edit hoàn lại)."""
+    """Thay một dòng chữ gốc bằng chữ mới. `new` là chuỗi thường, hoặc danh sách mẩu nhiều kiểu [(chữ, đậm, nghiêng, màu)].
+    Chữ mới dài quá bề rộng của cột / ô thì tự xuống dòng (đúng khoảng cách dòng của đoạn gốc):
+      - dòng nằm trong ô bảng: chỉ các dòng còn lại của chính ô đó bị đẩy xuống; ô hết chỗ thì cả hàng của bảng cao thêm
+        (phần bên dưới bảng lùi xuống), chữ ở các ô khác cùng hàng đứng yên;
+      - dòng thường: phần bên dưới của trang được đẩy xuống.
+    Trả về (tên phông, số dòng đã viết). Không đẩy được thì báo NoRoom, trang giữ nguyên (do model.edit hoàn lại)."""
+    segs = plain_segs(run, new, color, bold, italic) if isinstance(new, str) else [tuple(x) for x in new]
+    text = segs_text(segs)
     dx, dy = run.get("dir", (1, 0))
-    if not new_text.strip() or not (abs(dy) < 0.01 and dx > 0):
-        return replace_text_run(page, run, new_text, size, color, bold=bold, italic=italic), 1
+    if not text.strip() or not (abs(dy) < 0.01 and dx > 0):
+        s0 = segs[0] if segs else (text, None, None, None)
+        return replace_text_run(page, run, text, size, s0[3], bold=s0[1], italic=s0[2]), 1
     fsize = size or run["size"]
-    font = pick_font(run["font"], run["flags"], new_text, bold=bold, italic=italic)
     d = text_dict(page)
     me = next((r for r in text_runs(d) if r["bbox"] == run["bbox"]), run)
     limit, pitch = line_frame(page, me, d)
     pitch = max(pitch, 1.05 * fsize) if size else pitch
+    cell = cell_of(page, run["bbox"])
+    if cell:                                     # trong ô bảng: được dài tới sát viền phải của ô (trừ lề trong của ô)
+        pad = min(12.0, max(2.0, run["bbox"].x0 - cell["x0"]))
+        limit = max(limit if limit <= cell["x1"] - 1 else 0, cell["x1"] - pad)
     room = limit - run["origin"].x
-    if font.text_length(new_text, fontsize=fsize) <= room + 0.6 or room < 4 * fsize:
-        return replace_text_run(page, run, new_text, size, color, bold=bold, italic=italic), 1
-    lines = wrap_words(font, fsize, new_text, room)
-    name = replace_text_run(page, run, lines[0], size, color, bold=bold, italic=italic)
-    if len(lines) > 1:
-        # đáy thật của dòng vừa viết (phông thay thế có thể cao thấp hơn phông gốc một chút)
+    lines = rich_lines(run, segs, fsize, room if room >= 4 * fsize else None)
+    replace_text_run(page, run, "")              # gỡ dòng chữ cũ
+    extra = (len(lines) - 1) * pitch
+    if extra > 0:
         bottom = pymupdf.Rect(run["bbox"]).y1
-        for r in text_runs(text_dict(page)):
-            if abs(r["origin"].y - run["origin"].y) < 0.6 and r["bbox"].x1 > run["bbox"].x0 - 1 \
-                    and r["bbox"].x0 < max(limit, run["bbox"].x1) + 1:
-                bottom = max(bottom, r["bbox"].y1)
-        shift_below(page, bottom, (len(lines) - 1) * pitch)
-        col = color if color is not None else run["color"]
-        for k, text in enumerate(lines[1:], 1):
-            tw = pymupdf.TextWriter(page.rect, color=col)
-            tw.append(pymupdf.Point(run["origin"].x, run["origin"].y + k * pitch), text, font=font, fontsize=fsize)
-            tw.write_text(page, overlay=True)
+        if cell:
+            runs = text_runs(text_dict(page))
+            mine = [r for r in runs if r["bbox"].x0 >= cell["x0"] - 0.5 and r["bbox"].x1 <= cell["x1"] + 0.5
+                    and (cell["top"] or 0) - 1 <= r["bbox"].y0 and r["bbox"].y1 <= cell["bottom"] + 1]
+            lowest = max([r["bbox"].y1 for r in mine] + [bottom])
+            pad_top = min(12.0, max(2.0, (min(r["bbox"].y0 for r in mine) if mine else run["bbox"].y0) - cell["top"])) \
+                if cell["top"] is not None else 3.0
+            grow = lowest + extra + pad_top - cell["bottom"]
+            if grow > 0.5:                       # ô hết chỗ: cả hàng cao thêm, phần bên dưới bảng lùi xuống
+                shift_below(page, cell["bottom"] - 1.0, grow, cut=cell["bottom"] - 1.0)
+            if any(r["origin"].y > bottom for r in mine):       # các dòng còn lại của chính ô này: đẩy riêng trong ô
+                shift_in_box(page, cell["x0"] + 0.8, cell["x1"] - 0.8, bottom + 0.4,
+                             cell["bottom"] + max(0.0, grow) - 1.2, extra)
+        else:
+            shift_below(page, bottom, extra)
+    name = ""
+    for k, pieces in enumerate(lines):
+        name = write_pieces(page, pymupdf.Point(run["origin"].x, run["origin"].y + k * pitch), pieces, fsize) or name
     return name, len(lines)
 
 

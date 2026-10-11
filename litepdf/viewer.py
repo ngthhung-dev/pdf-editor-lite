@@ -1309,7 +1309,10 @@ class Viewer(QGraphicsView):
                 run = self.drag_run
                 new_origin = run["origin"] + (b - a)
                 with self.model.edit(i):
-                    used = tools.replace_text_run(self.model.doc[i], run, run["text"], origin=new_origin)
+                    page = self.model.doc[i]
+                    tools.replace_text_run(page, run, "")
+                    pieces = tools.rich_lines(run, list(run["segs"]), run["size"], None)[0]
+                    used = tools.write_pieces(page, new_origin, pieces, run["size"])
                     self.model.fonts_added = True
                 self.message.emit(f"Đã dời dòng chữ (phông thay thế: {used}).")
             elif not small:
@@ -1319,8 +1322,8 @@ class Viewer(QGraphicsView):
             self.drag_run = None
 
     def _edit_text_region(self, i: int, rect):
-        """Quét một khung: sửa mọi dòng chữ gốc trong khung cùng lúc (mỗi dòng trong hộp nhập ứng với một dòng chữ)."""
-        from .dialogs import TextDialog
+        """Quét một khung: sửa mọi dòng chữ gốc trong khung cùng lúc (mỗi dòng trong hộp ứng với một dòng chữ)."""
+        from .dialogs import RichTextDialog
         runs = tools.text_runs_in(self.model.doc[i], rect)
         if not runs:
             self.message.emit("Không có chữ gốc trong khung vừa quét (nếu là bản scan thì dùng Xoá vùng + Thêm chữ).")
@@ -1330,67 +1333,56 @@ class Viewer(QGraphicsView):
         if len(runs) > 400:
             self.message.emit("Khung vừa quét có quá nhiều dòng chữ. Hãy quét vùng nhỏ hơn.")
             return
-        first = runs[0]
-        same = len({(round(r["size"], 1), r["color"]) for r in runs}) == 1
         note = (f"{len(runs)} dòng chữ trong vùng đã quét, xếp từ trên xuống, trái sang phải (mỗi ô của bảng là một dòng). "
-                "Mỗi dòng ở đây thay cho đúng một dòng trên trang: giữ nguyên số dòng để chữ nằm đúng chỗ cũ; "
-                "xoá trống một dòng là xoá dòng đó. Dòng nào không sửa thì giữ nguyên chữ gốc; dòng được sửa mà có chữ đậm / "
-                "nghiêng xen giữa sẽ về một kiểu chữ."
-                + ("" if same else " Các dòng đang có cỡ / màu khác nhau: không đổi ô Cỡ chữ, Màu thì mỗi dòng giữ kiểu riêng."))
-        dlg = TextDialog(self, "Sửa chữ gốc trong vùng đã quét", "\n".join(r["text"] for r in runs), round(first["size"], 2),
-                         QColor.fromRgbF(*first["color"]), style=(bool(first["flags"] & 16), bool(first["flags"] & 2)),
-                         note=note)
-        dlg.resize(max(dlg.width(), 620), min(720, max(dlg.height(), 220 + 19 * len(runs))))
+                "Mỗi dòng ở đây thay cho đúng một dòng trên trang; xoá trống một dòng là xoá dòng đó; dòng không sửa thì giữ nguyên. "
+                "Bôi chọn chữ rồi bấm B / I / Màu chữ để định dạng riêng phần đó. Dòng dài quá bề rộng gốc sẽ tự xuống dòng.")
+        dlg = RichTextDialog(self, "Sửa chữ gốc trong vùng đã quét", [list(r["segs"]) for r in runs],
+                             round(runs[0]["size"], 2), note=note)
         if not dlg.exec():
             return
-        lines = dlg.text().split("\n")
-        while lines and not lines[-1].strip() and len(lines) > len(runs):
+        lines = dlg.lines()
+        while lines and not tools.segs_text(lines[-1]).strip() and len(lines) > len(runs):
             lines.pop()
-        size = dlg.size() if abs(dlg.size() - round(first["size"], 2)) > 0.01 else None      # không đổi: mỗi dòng giữ cỡ riêng
-        col = qcolor_to_rgb(dlg.color())
-        color = col if max(abs(col[k] - first["color"][k]) for k in range(3)) > 0.004 else None
         try:
             with self.model.edit(i):
-                b0, i0 = bool(first["flags"] & 16), bool(first["flags"] & 2)    # không đổi ô Đậm/Nghiêng: mỗi dòng giữ kiểu riêng
-                used = tools.replace_text_runs(self.model.doc[i], runs, lines, size, color,
-                                               bold=dlg.bold() if dlg.bold() != b0 else None,
-                                               italic=dlg.italic() if dlg.italic() != i0 else None)
+                used = tools.replace_text_runs(self.model.doc[i], runs, lines, dlg.size())
                 self.model.fonts_added = True
         except tools.NoRoom as e:
             QMessageBox.information(self, "Sửa chữ gốc", "Có dòng dài hơn bề rộng gốc nên cần xuống dòng, nhưng:\n\n" + str(e)
                                     + "\n\nChưa có gì bị thay đổi.")
             return
         self.hover_run = None
-        self.message.emit(f"Đã sửa {len(runs)} dòng chữ trong vùng" + (f" (phông thay thế: {used})." if used else "."))
+        self.message.emit("Đã sửa các dòng chữ trong vùng" + (f" (phông thay thế: {used})." if used else "."))
 
     def _edit_text_at(self, i: int, pt):
-        from .dialogs import TextDialog
+        from .dialogs import RichTextDialog
         run = tools.text_run_at(self.model.doc[i], pt)
         if not run:
             self.message.emit("Không có chữ gốc tại vị trí này (nếu là bản scan thì dùng Xoá vùng + Thêm chữ).")
             return
-        dlg = TextDialog(self, "Sửa chữ gốc", run["text"], round(run["size"], 2), QColor.fromRgbF(*run["color"]),
-                         single_line=True, style=(bool(run["flags"] & 16), bool(run["flags"] & 2)),
-                         note=f"Phông gốc: {run['font'].split('+')[-1]}. Để trống rồi OK nếu muốn xoá dòng này."
-                              + (" Dòng này có nhiều kiểu chữ (đậm / nghiêng / màu khác): sau khi sửa cả dòng sẽ về một kiểu."
-                                 if run.get("mixed") else ""))
+        dlg = RichTextDialog(self, "Sửa chữ gốc", [list(run["segs"])], round(run["size"], 2), single_line=True,
+                             note=f"Phông gốc: {run['font'].split('+')[-1]}. Bôi chọn chữ rồi bấm B / I / Màu chữ để định dạng "
+                                  "riêng phần đó. Chữ dài hơn bề rộng của dòng sẽ tự xuống dòng. Xoá hết chữ rồi OK để xoá dòng này.")
         if not dlg.exec():
             return
-        new = dlg.text().replace("\n", " ")
+        segs = dlg.lines()[0]
+        if dlg.size() is None and tools._norm_segs(segs) == tools._norm_segs(run["segs"]):
+            self.message.emit("Không có gì thay đổi.")
+            return
         n = 1
         try:
             with self.model.edit(i):
                 page = self.model.doc[i]
-                used, n = tools.replace_text_run_wrapped(page, run, new, dlg.size(), qcolor_to_rgb(dlg.color()),
-                                                         bold=dlg.bold(), italic=dlg.italic())
+                used, n = tools.replace_text_run_wrapped(page, run, segs, dlg.size())
                 self.model.fonts_added = True
         except tools.NoRoom as e:                # không xuống dòng được: trang đã được trả về như cũ
-            QMessageBox.information(self, "Sửa chữ gốc", "Chữ mới dài hơn bề rộng của dòng nên cần xuống dòng, nhưng:\n\n" + str(e))
+            QMessageBox.information(self, "Sửa chữ gốc", "Chữ mới dài hơn bề rộng của dòng nên cần xuống dòng, nhưng:\n\n" + str(e)
+                                    + "\n\nChưa có gì bị thay đổi.")
             return
         self.hover_run = None
         if used:
             self.message.emit(f"Đã sửa chữ (phông thay thế: {used})."
-                              + (f" Chữ dài hơn bề rộng dòng nên đã xuống thành {n} dòng, phần bên dưới được đẩy xuống." if n > 1 else ""))
+                              + (f" Chữ dài hơn bề rộng dòng nên đã xuống thành {n} dòng." if n > 1 else ""))
 
     def mouseDoubleClickEvent(self, e):
         if self.tool == "hand" and e.button() == Qt.LeftButton:

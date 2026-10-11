@@ -7,7 +7,7 @@ import sys
 import time
 
 from PySide6.QtCore import QEvent, QPointF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap, qRgb
+from PySide6.QtGui import QColor, QIcon, QImage, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut, qRgb
 from PySide6.QtWidgets import (QFrame, QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDialog,
                                QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
                                QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -315,6 +315,160 @@ class TextDialog(QDialog):
 
     def italic(self):
         return self.i.isChecked() if self.i else None
+
+
+class RichTextDialog(QDialog):
+    """Hộp sửa chữ gốc: sửa nội dung và định dạng từng phần (đậm, nghiêng, màu) như trong trình soạn văn bản.
+    Mỗi dòng trong hộp ứng với một dòng chữ trên trang. Dữ liệu vào/ra: mỗi dòng là [(chữ, đậm, nghiêng, (r, g, b)), ...]."""
+
+    def __init__(self, parent, title: str, lines: list[list[tuple]], size: float, single_line: bool = False,
+                 note: str | None = None):
+        super().__init__(parent)
+        from PySide6.QtGui import QFont, QTextCharFormat, QTextCursor
+        from PySide6.QtWidgets import QTextEdit, QToolButton
+        self.setWindowTitle(title)
+        self.single = single_line
+        self._size0 = round(size, 2)
+        first = next((seg for ln in lines for seg in ln), ("", False, False, (0, 0, 0)))
+        self.base_color = tuple(first[3])
+        lay = QVBoxLayout(self)
+        bar = QHBoxLayout()
+        bar.setSpacing(4)
+
+        def tool(text, tip, fn, checkable=False, style=""):
+            b = QToolButton()
+            b.setText(text)
+            b.setToolTip(tip)
+            b.setCheckable(checkable)
+            b.setMinimumSize(34, 28)
+            b.setStyleSheet("QToolButton{padding:2px 8px;border:1px solid #c4c7cc;border-radius:4px;background:#ffffff;" + style + "}"
+                            "QToolButton:checked{background:#d2e3fc;border-color:#1a73e8;}")
+            b.clicked.connect(fn)
+            bar.addWidget(b)
+            return b
+        self.b_bold = tool("B", "Đậm (Ctrl+B): áp dụng cho phần đang bôi chọn; không bôi chọn gì thì áp dụng cho tất cả",
+                           lambda on: self._apply(bold=on), True, "font-weight:bold;")
+        self.b_ital = tool("I", "Nghiêng (Ctrl+I)", lambda on: self._apply(italic=on), True, "font-style:italic;")
+        self.b_color = tool("Màu chữ…", "Đổi màu phần đang bôi chọn (không bôi chọn gì thì đổi tất cả)", self._pick_color)
+        tool("Bỏ định dạng", "Đưa phần đang chọn về chữ thường, màu của dòng gốc", self._clear)
+        bar.addSpacing(14)
+        bar.addWidget(QLabel("Cỡ chữ:"))
+        self.size_box = QDoubleSpinBox()
+        self.size_box.setRange(3, 200)
+        self.size_box.setDecimals(1)
+        self.size_box.setValue(size)
+        self.size_box.setToolTip("Cỡ chữ của các dòng được sửa. Để nguyên thì mỗi dòng giữ cỡ gốc của nó.")
+        bar.addWidget(self.size_box)
+        bar.addStretch()
+        lay.addLayout(bar)
+        self.edit = QTextEdit()
+        self.edit.setAcceptRichText(False)           # dán từ nơi khác vào: chỉ lấy chữ, không kéo theo định dạng lạ
+        f = self.edit.font()
+        f.setPointSize(max(f.pointSize(), 11))
+        self.edit.setFont(f)
+        light = any(sum(seg[3]) / 3 > 0.78 for ln in lines for seg in ln)
+        if light:                                    # chữ gốc màu sáng (trắng trên nền đậm): nền hộp tối lại cho dễ đọc
+            self.edit.setStyleSheet("QTextEdit{background:#4a4f57;}")
+        cur = self.edit.textCursor()
+        for k, ln in enumerate(lines):
+            if k:
+                cur.insertBlock()
+            for text, bold, italic, col in ln:
+                fmt = QTextCharFormat()
+                fmt.setFontWeight(QFont.Bold if bold else QFont.Normal)
+                fmt.setFontItalic(bool(italic))
+                fmt.setForeground(QColor.fromRgbF(*col))
+                cur.insertText(text, fmt)
+        if single_line:
+            self.edit.setMaximumHeight(96)
+        lay.addWidget(self.edit, 1)
+        if note:
+            lb = QLabel(note)
+            lb.setWordWrap(True)
+            lb.setStyleSheet("color:#5f6368")
+            lay.addWidget(lb)
+        lay.addWidget(_buttons(self))
+        self.resize(620, 230 if single_line else min(720, 260 + 19 * len(lines)))
+        self.edit.currentCharFormatChanged.connect(self._sync)
+        self.edit.cursorPositionChanged.connect(lambda: self._sync(self.edit.currentCharFormat()))
+        for key, btn in (("Ctrl+B", self.b_bold), ("Ctrl+I", self.b_ital)):
+            sc = QShortcut(QKeySequence(key), self)
+            sc.activated.connect(btn.click)
+        self.edit.setFocus()
+        cur.movePosition(QTextCursor.End)
+        self.edit.setTextCursor(cur)
+        self._sync(self.edit.currentCharFormat())
+
+    # -- định dạng
+    def _target(self):
+        from PySide6.QtGui import QTextCursor
+        cur = self.edit.textCursor()
+        if not cur.hasSelection():
+            cur.select(QTextCursor.Document)
+        return cur
+
+    def _apply(self, bold=None, italic=None, color: QColor | None = None):
+        from PySide6.QtGui import QFont, QTextCharFormat
+        fmt = QTextCharFormat()
+        if bold is not None:
+            fmt.setFontWeight(QFont.Bold if bold else QFont.Normal)
+        if italic is not None:
+            fmt.setFontItalic(bool(italic))
+        if color is not None:
+            fmt.setForeground(color)
+        self._target().mergeCharFormat(fmt)
+        self.edit.mergeCurrentCharFormat(fmt)
+        self.edit.setFocus()
+
+    def _pick_color(self):
+        c = QColorDialog.getColor(self.edit.currentCharFormat().foreground().color(), self, "Chọn màu chữ")
+        if c.isValid():
+            self._apply(color=c)
+
+    def _clear(self):
+        self._apply(bold=False, italic=False, color=QColor.fromRgbF(*self.base_color))
+
+    def _sync(self, fmt):
+        from PySide6.QtGui import QFont
+        self.b_bold.setChecked(fmt.fontWeight() >= QFont.DemiBold)
+        self.b_ital.setChecked(fmt.fontItalic())
+
+    # -- kết quả
+    def lines(self) -> list[list[tuple]]:
+        from PySide6.QtGui import QFont
+        out = []
+        block = self.edit.document().begin()
+        while block.isValid():
+            segs: list[list] = []
+            it = block.begin()
+            while not it.atEnd():
+                fr = it.fragment()
+                if fr.isValid() and fr.text():
+                    fm = fr.charFormat()
+                    br = fm.foreground()
+                    col = br.color().getRgbF()[:3] if br.style() != Qt.NoBrush else self.base_color
+                    col = tuple(round(v, 4) for v in col)
+                    seg = [fr.text().replace("\u2028", " "), fm.fontWeight() >= QFont.DemiBold, bool(fm.fontItalic()), col]
+                    if segs and segs[-1][1:] == seg[1:]:
+                        segs[-1][0] += seg[0]
+                    else:
+                        segs.append(seg)
+                it += 1
+            out.append([tuple(x) for x in segs])
+            block = block.next()
+        if self.single:                              # hộp một dòng: lỡ xuống dòng thì nối lại thành một dòng
+            flat: list[tuple] = []
+            for ln in out:
+                if flat and ln:
+                    flat.append((" ",) + tuple(flat[-1][1:]))
+                flat += ln
+            out = [flat]
+        return out
+
+    def size(self) -> float | None:
+        """Cỡ chữ mới, hoặc None nếu người dùng không đổi ô Cỡ chữ."""
+        v = self.size_box.value()
+        return None if abs(v - self._size0) < 0.06 else v
 
 
 def form_dialog(parent, title: str, fields: list[tuple], note: str | None = None, ok_text="OK") -> dict | None:
