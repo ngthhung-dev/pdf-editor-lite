@@ -80,10 +80,12 @@ jobs:
           path: build_win/output/*
           compression-level: 0
       - name: Publish release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = "v1.0.0-build${{ github.run_number }}"
-          $files = Get-ChildItem build_win/output | Where-Object { $_.Length -lt 2GB } | ForEach-Object { $_.FullName }
-          gh release create $tag @files --repo "${{ github.repository }}" --title "PDF Editor Lite 1.0.0 (build ${{ github.run_number }})" --notes "Bo cai Windows tao tu dong. Tai file PDF-Editor-Lite-1.0.0-Setup.exe ve va chay."
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0-build${{ github.run_number }}
+          name: PDF Editor Lite 1.0.0 (build ${{ github.run_number }})
+          body: |
+            Bo cai Windows 64-bit, tao tu dong.
+            Tai file PDF-Editor-Lite-1.0.0-Setup.exe ve va chay. Khi cai co the tich chon tung thanh phan.
+          files: build_win/output/*.exe
+          fail_on_unmatched_files: true
