@@ -90,9 +90,11 @@ Type: filesandordirs; Name: "{app}\_internal\onnxruntime"; Components: not rapid
 #endif
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
+; AppUserModelID phai trung voi ma app tu dat luc chay (ngthhung.PDFEditorLite): Windows dua vao do de lay dung bieu tuong
+; cho nut tren thanh tac vu va de ghim app.
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\_internal\assets\app_icon.ico"; AppUserModelID: "ngthhung.PDFEditorLite"
 Name: "{group}\Gỡ cài đặt {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\_internal\assets\app_icon.ico"; AppUserModelID: "ngthhung.PDFEditorLite"; Tasks: desktopicon
 
 [Registry]
 ; Dang ky de app xuat hien trong "Open with" va trong Settings > Default apps. Windows 10/11 khong cho bo cai tu dat
