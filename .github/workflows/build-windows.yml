@@ -1,4 +1,4 @@
-name: Build Windows installer
+name: Build installers (Windows, macOS, Linux)
 
 on:
   push:
@@ -22,7 +22,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -55,27 +55,15 @@ jobs:
             if ("${{ inputs.model }}" -ne "true") { $a.NoModel = $true }
           } else { $a.NoModel = $true }
           ./packaging/windows/build_windows.ps1 @a
-      - name: Luu nhat ky build vao nhanh build-logs
-        if: always()
-        shell: pwsh
-        run: |
-          $d = Join-Path $env:RUNNER_TEMP "logs"
-          New-Item -ItemType Directory -Force -Path $d | Out-Null
-          foreach ($f in @("build_win/build.log", "build_win/selftest.json", "build_win/inno.log")) { if (Test-Path $f) { Copy-Item $f $d } }
-          Set-Location $d
-          git init -q -b build-logs
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          "run ${{ github.run_number }} - ${{ job.status }}" | Set-Content status.txt
-          git add -A
-          git commit -q -m "log run ${{ github.run_number }}"
-          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" build-logs
-      - name: Upload selftest
+      - name: Upload nhat ky
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: selftest
-          path: build_win/selftest.json
+          name: logs-windows
+          path: |
+            build_win/build.log
+            build_win/selftest.json
+            build_win/inno.log
           if-no-files-found: ignore
       - name: Dat ten file cai kem so build
         shell: pwsh
@@ -86,16 +74,129 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: PDF-Editor-Lite-Setup
-          path: build_win/output/*
+          name: installer-windows
+          path: build_win/output/*.exe
           compression-level: 0
+
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Thu vien he thong cho Qt
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libfontconfig1 libdbus-1-3 fonts-liberation fonts-dejavu-core
+      - name: Build
+        run: |
+          echo "BUILD = '${{ github.run_number }}'" > litepdf/_build.py
+          LITEPDF_BUILD=${{ github.run_number }} bash packaging/linux/build_linux.sh
+      - name: Cai thu goi .deb va tu kiem tra ban da cai
+        run: |
+          sudo apt-get install -y -q ./build_linux/output/*.deb 2>&1 | tail -5
+          QT_QPA_PLATFORM=offscreen timeout 300 /usr/bin/pdf-editor-lite --selftest "$PWD/build_linux/selftest_installed.json" || true
+          cat build_linux/selftest_installed.json
+          desktop-file-validate /usr/share/applications/pdf-editor-lite.desktop || true
+      - name: Upload nhat ky
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-linux
+          path: |
+            build_linux/build.log
+            build_linux/selftest.json
+            build_linux/selftest_installed.json
+            build_linux/pyinstaller.log
+          if-no-files-found: ignore
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-linux
+          path: build_linux/output/*.deb
+          compression-level: 0
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, tag: arm64 }
+          - { os: macos-15-intel, tag: intel }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          echo "BUILD = '${{ github.run_number }}'" > litepdf/_build.py
+          LITEPDF_BUILD=${{ github.run_number }} bash packaging/macos/build_macos.sh
+      - name: Cai thu bo cai .pkg va tu kiem tra ban da cai
+        run: |
+          sudo installer -pkg build_mac/output/*.pkg -target / 2>&1 | tail -5
+          ls -d /Applications/"PDF Editor Lite.app" /Applications/LibreOffice.app
+          "/Applications/PDF Editor Lite.app/Contents/MacOS/PDFEditorLite" --selftest "$PWD/build_mac/selftest_installed.json" || true
+          cat build_mac/selftest_installed.json
+          codesign -dv "/Applications/PDF Editor Lite.app" 2>&1 | head -5
+      - name: Upload nhat ky
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-macos-${{ matrix.tag }}
+          path: |
+            build_mac/build.log
+            build_mac/selftest.json
+            build_mac/selftest_installed.json
+            build_mac/pyinstaller.log
+          if-no-files-found: ignore
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-macos-${{ matrix.tag }}
+          path: build_mac/output/*.pkg
+          compression-level: 0
+
+  release:
+    needs: [windows, linux, macos]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+      - name: Luu nhat ky build vao nhanh build-logs
+        run: |
+          mkdir logs && cd logs
+          for d in ../art/logs-*; do [ -d "$d" ] && cp -r "$d" "./$(basename "$d" | sed 's/^logs-//')"; done
+          [ -f windows/selftest.json ] && cp windows/selftest.json selftest.json
+          echo "run ${{ github.run_number }} - windows=${{ needs.windows.result }} linux=${{ needs.linux.result }} macos=${{ needs.macos.result }}" > status.txt
+          ls -R ../art >> status.txt
+          git init -q -b build-logs
+          git config user.name "github-actions"; git config user.email "actions@github.com"
+          git add -A && git commit -q -m "log run ${{ github.run_number }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" build-logs
+      - name: Gom file cai
+        id: files
+        run: |
+          mkdir out; find art -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.pkg' \) -exec cp {} out/ \;
+          ls -la out; echo "n=$(ls out | wc -l)" >> "$GITHUB_OUTPUT"
       - name: Publish release
+        if: steps.files.outputs.n != '0'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.0-build${{ github.run_number }}
           name: PDF Editor Lite 1.0.0 (build ${{ github.run_number }})
           body: |
-            Bo cai Windows 64-bit, tao tu dong.
-            Tai file PDF-Editor-Lite-1.0.0-build${{ github.run_number }}-Setup.exe ve va chay (dong PDF Editor Lite truoc khi cai). Khi cai co the tich chon tung thanh phan.
-          files: build_win/output/*.exe
+            Bo cai tao tu dong (dong PDF Editor Lite truoc khi cai):
+            - Windows 64-bit: file ...-Setup.exe
+            - macOS may chip Apple (M1 tro len): file ...-macOS-AppleSilicon.pkg
+            - macOS may chip Intel: file ...-macOS-Intel.pkg
+            - Linux Mint / Ubuntu / Debian 64-bit: file .deb
+            macOS: bo cai chua co chu ky Apple, lan dau bam chuot phai vao file .pkg > Open (hoac System Settings > Privacy & Security > Open Anyway).
+          files: out/*
           fail_on_unmatched_files: true

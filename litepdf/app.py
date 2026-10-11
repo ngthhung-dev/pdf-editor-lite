@@ -1030,9 +1030,12 @@ class MainWindow(QMainWindow):
         from .dialogs import data_dir
         import importlib.util
         st = {"frozen": tools.FROZEN, "data_dir": data_dir(), "gemini": bool(self.cfg.get("gemini_key")),
-              "add": "Chạy lại bộ cài PDF Editor Lite và tích thành phần này." if tools.FROZEN else
+              "add": ("Chạy lại bộ cài PDF Editor Lite và tích thành phần này." if sys.platform.startswith("win") else
+                      "Cài lại PDF Editor Lite bằng bộ cài mới nhất.") if tools.FROZEN else
                      "Xem mục Nhận dạng chữ (OCR) trong app để cài.",
-              "add_ai": "Chạy lại bộ cài và tích “AI dịch chạy trên máy”, hoặc cài Ollama từ ollama.com."}
+              "add_ai": "Chạy lại bộ cài và tích “AI dịch chạy trên máy”, hoặc cài Ollama từ ollama.com."
+                        if sys.platform != "linux" else
+                        "Mở mục “PDF Editor Lite – Cài AI dịch trên máy” trong menu ứng dụng, hoặc cài Ollama từ ollama.com."}
         for key, fn in (("tess", tools.tess_languages), ("rapid", ocr.rapid_available),
                         ("pdf2docx", lambda: importlib.util.find_spec("pdf2docx") is not None),
                         ("openpyxl", lambda: importlib.util.find_spec("openpyxl") is not None),
@@ -2816,6 +2819,19 @@ def run(argv: list[str]) -> int:
         listen_for_files(win)
     except Exception:
         pass
+    if sys.platform == "darwin":      # macOS giao file (bấm đúp trong Finder, kéo vào biểu tượng Dock) bằng sự kiện, không qua tham số
+        from PySide6.QtCore import QEvent, QObject
+
+        class _FileOpen(QObject):
+            def eventFilter(self, obj, ev):
+                if ev.type() == QEvent.FileOpen and ev.file():
+                    win.open_path(ev.file())
+                    win.raise_()
+                    win.activateWindow()
+                    return True
+                return False
+        app._file_open = _FileOpen(app)
+        app.installEventFilter(app._file_open)
     for a in files:
         win.open_path(a)
     return app.exec()

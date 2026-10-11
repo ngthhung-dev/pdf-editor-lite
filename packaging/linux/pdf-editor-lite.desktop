@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PDF Editor Lite
+GenericName=Trình xem và sửa PDF
+Comment=Xem, sửa, chuyển đổi, ký số, OCR và dịch PDF
+Exec=/opt/pdf-editor-lite/PDFEditorLite %F
+Icon=pdf-editor-lite
+Terminal=false
+Categories=Office;Viewer;Graphics;
+MimeType=application/pdf;
+StartupWMClass=PDFEditorLite

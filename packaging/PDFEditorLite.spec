@@ -28,7 +28,11 @@ for pkg in ("rapidocr", "onnxruntime", "pdf2docx", "pkcs11", "docx", "cv2", "ome
 hidden += collect_submodules("litepdf")
 datas += [(os.path.join(ROOT, "assets"), "assets")]
 
-icon = os.path.join(ROOT, "assets", "app_icon.ico") if sys.platform.startswith("win") else None
+tess = os.environ.get("LITEPDF_TESSDATA")      # macOS / Linux: dữ liệu Tesseract nằm luôn trong bản đóng gói
+if tess and os.path.isdir(tess):
+    datas += [(tess, os.path.join("resources", "tessdata"))]
+
+icon = os.path.join(ROOT, "assets", "app_icon.ico") if sys.platform.startswith("win") else os.environ.get("LITEPDF_ICNS")
 
 a = Analysis([os.path.join(ROOT, "main.py")], pathex=[ROOT], binaries=binaries, datas=datas, hiddenimports=hidden,
              excludes=["tkinter", "matplotlib", "IPython", "pytest", "PyQt5", "PyQt6", "PySide2", "torch", "paddle"],
@@ -37,3 +41,15 @@ pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="PDFEditorLite", console=False, icon=icon,
           version=os.path.join(SPECPATH, "windows", "version_info.txt") if sys.platform.startswith("win") else None)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="PDFEditorLite")
+
+if sys.platform == "darwin":
+    app = BUNDLE(coll, name="PDF Editor Lite.app", icon=icon, bundle_identifier="dev.ngthhung.pdfeditorlite", version="1.0.0",
+                 info_plist={
+                     "CFBundleDisplayName": "PDF Editor Lite", "CFBundleName": "PDF Editor Lite",
+                     "CFBundleShortVersionString": "1.0.0", "CFBundleVersion": os.environ.get("LITEPDF_BUILD", "1"),
+                     "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "12.0",
+                     "NSHumanReadableCopyright": "PDF Editor Lite by ngthhung",
+                     "CFBundleDocumentTypes": [{
+                         "CFBundleTypeName": "PDF", "CFBundleTypeRole": "Editor", "LSHandlerRank": "Alternate",
+                         "LSItemContentTypes": ["com.adobe.pdf"], "CFBundleTypeExtensions": ["pdf"]}],
+                 })

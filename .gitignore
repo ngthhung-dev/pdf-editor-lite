@@ -8,3 +8,5 @@ build_win/
 GHI_CHU_DONG_GOI.txt
 HUONG_DAN.txt
 litepdf/_build.py
+build_linux/
+build_mac/

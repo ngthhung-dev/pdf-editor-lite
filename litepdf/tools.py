@@ -183,7 +183,12 @@ def app_dir() -> str:
 
 def resource_dir() -> str:
     """Thư mục tài nguyên kèm theo bộ cài (dữ liệu OCR, LibreOffice gọn...)."""
-    return os.path.join(app_dir(), "resources")
+    own = os.path.join(app_dir(), "resources")
+    if FROZEN and not os.path.isdir(own):      # macOS (.app) / Linux: tài nguyên nằm trong gói dữ liệu của bản đóng gói
+        alt = os.path.join(getattr(sys, "_MEIPASS", ""), "resources")
+        if os.path.isdir(alt):
+            return alt
+    return own
 
 
 def has_ms_office() -> bool:

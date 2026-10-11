@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PDF Editor Lite – Cài AI dịch trên máy
+Comment=Tải và cài Ollama cùng model dịch (cần mạng, vài GB; máy nên có RAM từ 8 GB)
+Exec=/opt/pdf-editor-lite/cai-ai-dich.sh
+Icon=pdf-editor-lite
+Terminal=true
+Categories=Office;Settings;
