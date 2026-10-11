@@ -1818,7 +1818,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 work.close()
                 raise
-            if not self._run_engine(engine, [texts[k] for k in miss], o, from_mem, result, miss):
+            ocr_name = {"gemini": "Gemini", "rapid": "RapidOCR", "tesseract": "Tesseract"}.get(kind, "")
+            head = f"Đã đọc xong chữ trong hình bằng {ocr_name}.\n" if ocr_name else ""
+            if not self._run_engine(engine, [texts[k] for k in miss], o, from_mem, result, miss, head):
                 work.close()
                 return
             try:
@@ -1827,8 +1829,8 @@ class MainWindow(QMainWindow):
                 pass
         self._finish_translation(t, m, work, job, result, o, engine, code, from_mem, len(miss))
 
-    def _run_engine(self, engine, texts, o, from_mem, result, miss) -> bool:
-        prog = QProgressDialog(f"Đang dịch bằng {engine.name}…", "Dừng", 0, 100, self)
+    def _run_engine(self, engine, texts, o, from_mem, result, miss, head="") -> bool:
+        prog = QProgressDialog(f"{head}Đang dịch bằng {engine.name}…", "Dừng", 0, 100, self)
         prog.setWindowTitle(APP_NAME)
         prog.setWindowModality(Qt.WindowModal)
         prog.setMinimumDuration(0)
@@ -1840,11 +1842,11 @@ class MainWindow(QMainWindow):
 
         def on_progress(a, b, note):
             if note:
-                prog.setLabelText(note)
+                prog.setLabelText(f"{head}Bước dịch bằng {engine.name}: {note}")
             elif b > 0:
                 prog.setMaximum(b)
                 prog.setValue(a)
-                prog.setLabelText(f"Đang dịch bằng {engine.name}… {a}/{b} đoạn{extra}")
+                prog.setLabelText(f"{head}Đang dịch bằng {engine.name}… {a}/{b} đoạn{extra}")
         worker.progress.connect(on_progress)
         prog.canceled.connect(lambda: setattr(engine, "cancel", True))
         loop = QEventLoop()
