@@ -26,7 +26,7 @@ for pkg in ("pymupdf", "pymupdf_fonts", "pyhanko", "pyhanko_certvalidator", "asn
 for pkg in ("rapidocr", "onnxruntime", "pdf2docx", "pkcs11", "docx", "cv2", "omegaconf", "pyclipper", "shapely"):
     take(pkg, required=False)          # phần mở rộng: thiếu thì app vẫn chạy, chỉ thiếu đúng chức năng đó
 hidden += collect_submodules("litepdf")
-datas += [(os.path.join(ROOT, "assets"), "assets"), (os.path.join(ROOT, "HUONG_DAN.txt"), ".")]
+datas += [(os.path.join(ROOT, "assets"), "assets")]
 
 icon = os.path.join(ROOT, "assets", "app_icon.ico") if sys.platform.startswith("win") else None
 

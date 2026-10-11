@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 data/
 build_win/
+
+# ghi chu noi bo, khong dua len repo
+GHI_CHU_DONG_GOI.txt
+HUONG_DAN.txt

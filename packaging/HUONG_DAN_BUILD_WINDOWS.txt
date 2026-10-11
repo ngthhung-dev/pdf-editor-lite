@@ -37,6 +37,6 @@ BO CAI CHO NGUOI DUNG TICH CHON
   Chay lai bo cai de them/bot thanh phan. Du lieu nguoi dung (key, cai dat, bo nho dich) nam o
   %APPDATA%\PDF Editor Lite va khong bi bo cai hay trinh go cai dat dong toi.
 
-KHONG KEM DUOC: driver USB token, chung thu goc tin cay, API key Gemini (xem GHI_CHU_DONG_GOI.txt).
+KHONG KEM DUOC: driver USB token, chung thu goc tin cay, API key Gemini.
 Windows 10/11 khong cho bo cai tu dat app lam trinh mo PDF mac dinh: nguoi dung chuot phai file .pdf >
 Open with > PDF Editor Lite > Always, hoac vao Settings > Apps > Default apps.
