@@ -77,7 +77,7 @@ SHORTCUTS = {
     "Đặt mật khẩu cho file…": "Ctrl+Shift+P", "Gỡ mật khẩu": "Ctrl+Shift+U",
     "Mở thư mục chứng thư gốc tin cậy": "Ctrl+Alt+R",
     # Trợ giúp
-    "Hướng dẫn sử dụng": "F1", "Hướng dẫn chi tiết có hình minh hoạ (PDF)": "Ctrl+Shift+F1", "Danh sách phím tắt": "Ctrl+F1", "Giới thiệu": "Shift+F1",
+    "Hướng dẫn sử dụng": "F1", "Danh sách phím tắt": "Ctrl+F1", "Giới thiệu": "Shift+F1",
 }
 SHOW_ONLY = {"Xoá hình ảnh đang chọn khỏi trang", "Xoá ghi chú/ảnh đang chọn"}
 
@@ -224,16 +224,28 @@ class DocTab(QWidget):
         return QIcon(pm)
 
     def _fill_thumbs(self):
-        for _ in range(6):
-            if not self._pending:
-                self._timer.stop()
-                return
-            i = self._pending.pop(0)
+        """Dựng dần ảnh thu nhỏ mà không làm đơ cửa sổ: mỗi nhịp chỉ làm trong khoảng 30 ms rồi nhường cho giao diện;
+        trang gần chỗ đang xem được dựng trước; bảng Trang đang ẩn (đang so sánh, đang ở tab Bookmark) thì tạm nghỉ."""
+        import time
+        if not self._pending:
+            self._timer.stop()
+            return
+        if not self.thumbs.isVisible():
+            self._timer.setInterval(500)
+            return
+        self._timer.setInterval(12)
+        cur = self.own_viewer.current_page()
+        end = time.perf_counter() + 0.03
+        while self._pending:
+            i = min(self._pending, key=lambda k: abs(k - cur))
+            self._pending.remove(i)
             if i < self.thumbs.count():
                 try:
                     self.thumbs.item(i).setIcon(self._thumb(i))
                 except Exception:
                     pass
+            if time.perf_counter() > end:
+                break
 
     def _on_changed(self, page, structure):
         if page == "toc":
@@ -756,8 +768,7 @@ class MainWindow(QMainWindow):
         A("Mở thư mục chứng thư gốc tin cậy", self.open_trust_dir, doc=False, menu=m)
         # --- Trợ giúp
         m = mb.addMenu("Trợ &giúp")
-        A("Hướng dẫn sử dụng", self.show_guide, doc=False, menu=m, guard=False)
-        A("Hướng dẫn chi tiết có hình minh hoạ (PDF)", self.open_manual, doc=False, menu=m, guard=False)
+        A("Hướng dẫn sử dụng", self.open_manual, doc=False, menu=m, guard=False)
         A("Danh sách phím tắt", self.show_shortcuts, doc=False, menu=m, guard=False)
         A("Giới thiệu", self.about, doc=False, menu=m, guard=False)
         self._apply_shortcuts()
@@ -791,7 +802,7 @@ class MainWindow(QMainWindow):
         return out
 
     def open_manual(self):
-        """Mở file hướng dẫn chi tiết (PDF kèm theo app) ở một tab."""
+        """Mở file hướng dẫn sử dụng (PDF kèm theo app) ở một tab."""
         name = "Huong dan su dung PDF Editor Lite.pdf"
         roots = [getattr(sys, "_MEIPASS", ""), os.path.join(tools.app_dir(), "_internal"), tools.app_dir()]
         for root in roots:
@@ -799,10 +810,10 @@ class MainWindow(QMainWindow):
             if path and os.path.isfile(path):
                 self.open_path(path)
                 return
-        self.info("Không tìm thấy file hướng dẫn chi tiết kèm theo app. Hãy xem bản tóm tắt ở Trợ giúp → Hướng dẫn sử dụng (F1).")
+        self.info("Không tìm thấy file hướng dẫn kèm theo app (assets/" + name + ").")
 
-    def show_guide(self):
-        """Hướng dẫn sử dụng, kèm tình trạng các thành phần tuỳ chọn trên máy này."""
+    def component_status(self) -> str:
+        """Bảng HTML: các thành phần tuỳ chọn (OCR, LibreOffice, key, AI trên máy…) có sẵn trên máy này không."""
         from . import guide, ocr
         from . import translate as T
         from .dialogs import data_dir
@@ -827,11 +838,7 @@ class MainWindow(QMainWindow):
             st["local"] = ", ".join(f"{n} ({len(ms)} model)" for n, _b, ms in T.detect_local())
         except Exception:
             st["local"] = ""
-        d = ReportDialog(self, "Hướng dẫn sử dụng", guide.guide_html(APP_NAME, VERSION, st))
-        from .dialogs import fit_dialog, center_on_parent
-        fit_dialog(d, 860, 680)
-        center_on_parent(d)
-        d.exec()
+        return "<table cellspacing='0' cellpadding='3'>" + guide.status_rows(st) + "</table>"
 
     def show_shortcuts(self):
         cols = []
@@ -2328,16 +2335,19 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(trust_dir()))
 
     def about(self):
-        so = tools.find_soffice()
-        ocr = ", ".join(tools.tess_languages()) or "chưa cài"
-        QMessageBox.about(self, "Giới thiệu", f"<h3>{APP_NAME}</h3>"
-                          f"<p><b>{APP_NAME} by {AUTHOR}</b><br>Phiên bản {VERSION}</p>"
-                          "<p>Trình xem và chỉnh sửa PDF gọn nhẹ.</p>"
-                          f"<p>Lõi PDF: PyMuPDF {pymupdf.VersionBind}<br>"
-                          f"Chuyển Word/Excel → PDF: {'LibreOffice' if so else 'chưa có LibreOffice (dùng MS Office nếu có)'}<br>"
-                          f"OCR (Tesseract): {ocr}</p>"
-                          "<p>Mã nguồn dùng PyMuPDF (giấy phép AGPL) và pyHanko (MIT): dùng nội bộ thoải mái, "
-                          "nếu phát hành cho người khác cần kèm mã nguồn.</p>")
+        d = ReportDialog(self, "Giới thiệu",
+                         "<style>p,td{font-size:13px;line-height:150%} td{padding:3px 12px 3px 0;vertical-align:top}</style>"
+                         f"<h2 style='margin:2px 0'>{APP_NAME}</h2>"
+                         f"<p><b>{APP_NAME} by {AUTHOR}</b><br>Phiên bản {VERSION} · lõi PDF: PyMuPDF {pymupdf.VersionBind}</p>"
+                         "<p>Trình xem và chỉnh sửa PDF gọn nhẹ. Cách dùng: Trợ giúp → Hướng dẫn sử dụng (F1).</p>"
+                         "<h3 style='color:#1a56c4;margin:12px 0 2px 0'>Tình trạng các thành phần trên máy này</h3>"
+                         + self.component_status() +
+                         "<p style='color:#5f6368'>Mã nguồn dùng PyMuPDF (giấy phép AGPL) và pyHanko (MIT): dùng nội bộ "
+                         "thoải mái, nếu phát hành cho người khác cần kèm mã nguồn.</p>")
+        from .dialogs import fit_dialog, center_on_parent
+        fit_dialog(d, 720, 520)
+        center_on_parent(d)
+        d.exec()
 
 
 def selftest(out: str | None = None) -> int:
