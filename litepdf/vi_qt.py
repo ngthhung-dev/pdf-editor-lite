@@ -74,9 +74,10 @@ SKIP = {"QShortcut", "QPageSize"}       # tên phím (Ctrl, Shift…) và tên k
 
 class ViTranslator(QTranslator):
     def translate(self, context, source, disambiguation=None, n=-1):
+        # Không có bản dịch thì phải trả về None (chuỗi rỗng "không có"); trả "" là Qt hiểu bản dịch là chuỗi trống
         if context in SKIP or not (context or "").startswith("Q"):
-            return ""
-        return VI.get(source, "")
+            return None
+        return VI.get(source)
 
     def isEmpty(self):
         return False
