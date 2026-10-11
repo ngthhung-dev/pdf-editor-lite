@@ -186,6 +186,18 @@ def resource_dir() -> str:
     return os.path.join(app_dir(), "resources")
 
 
+def has_ms_office() -> bool:
+    """Máy Windows có Microsoft Word không (app dùng Office để chuyển file Office sang PDF khi không có LibreOffice)."""
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        import winreg
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "Word.Application"))
+        return True
+    except Exception:
+        return False
+
+
 def find_soffice() -> str | None:
     own = os.path.join(resource_dir(), "LibreOffice", "program", "soffice.exe" if sys.platform.startswith("win") else "soffice")
     if os.path.exists(own):

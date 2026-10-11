@@ -77,7 +77,7 @@ SHORTCUTS = {
     "Đặt mật khẩu cho file…": "Ctrl+Shift+P", "Gỡ mật khẩu": "Ctrl+Shift+U",
     "Mở thư mục chứng thư gốc tin cậy": "Ctrl+Alt+R",
     # Trợ giúp
-    "Danh sách phím tắt": "F1", "Giới thiệu": "Shift+F1",
+    "Hướng dẫn sử dụng": "F1", "Danh sách phím tắt": "Ctrl+F1", "Giới thiệu": "Shift+F1",
 }
 SHOW_ONLY = {"Xoá hình ảnh đang chọn khỏi trang", "Xoá ghi chú/ảnh đang chọn"}
 
@@ -756,6 +756,7 @@ class MainWindow(QMainWindow):
         A("Mở thư mục chứng thư gốc tin cậy", self.open_trust_dir, doc=False, menu=m)
         # --- Trợ giúp
         m = mb.addMenu("Trợ &giúp")
+        A("Hướng dẫn sử dụng", self.show_guide, doc=False, menu=m, guard=False)
         A("Danh sách phím tắt", self.show_shortcuts, doc=False, menu=m, guard=False)
         A("Giới thiệu", self.about, doc=False, menu=m, guard=False)
         self._apply_shortcuts()
@@ -787,6 +788,38 @@ class MainWindow(QMainWindow):
             if rows:
                 out.append((act.text().replace("&&", "\x00").replace("&", "").replace("\x00", "&"), rows))
         return out
+
+    def show_guide(self):
+        """Hướng dẫn sử dụng, kèm tình trạng các thành phần tuỳ chọn trên máy này."""
+        from . import guide, ocr
+        from . import translate as T
+        from .dialogs import data_dir
+        import importlib.util
+        st = {"frozen": tools.FROZEN, "data_dir": data_dir(), "gemini": bool(self.cfg.get("gemini_key")),
+              "add": "Chạy lại bộ cài PDF Editor Lite và tích thành phần này." if tools.FROZEN else
+                     "Xem mục Nhận dạng chữ (OCR) trong app để cài.",
+              "add_ai": "Chạy lại bộ cài và tích “AI dịch chạy trên máy”, hoặc cài Ollama từ ollama.com."}
+        for key, fn in (("tess", tools.tess_languages), ("rapid", ocr.rapid_available),
+                        ("pdf2docx", lambda: importlib.util.find_spec("pdf2docx") is not None),
+                        ("pkcs11", lambda: importlib.util.find_spec("pkcs11") is not None)):
+            try:
+                st[key] = fn()
+            except Exception:
+                st[key] = None
+        try:
+            so = tools.find_soffice()
+            st["office"] = "LibreOffice" if so else ("Microsoft Office" if tools.has_ms_office() else "")
+        except Exception:
+            st["office"] = ""
+        try:
+            st["local"] = ", ".join(f"{n} ({len(ms)} model)" for n, _b, ms in T.detect_local())
+        except Exception:
+            st["local"] = ""
+        d = ReportDialog(self, "Hướng dẫn sử dụng", guide.guide_html(APP_NAME, VERSION, st))
+        from .dialogs import fit_dialog, center_on_parent
+        fit_dialog(d, 860, 680)
+        center_on_parent(d)
+        d.exec()
 
     def show_shortcuts(self):
         cols = []

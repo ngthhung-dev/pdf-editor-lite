@@ -211,6 +211,8 @@ ICONS.update({
     "saveimg": lambda p: (_picture(p, 3, 3, 15, 12), _arrow(p, 17, 13, 17, 21, 3.2, "#1a73e8")),
     "delimg": lambda p: (_picture(p, 3, 3, 15, 12), _cross(p, 17.5, 17.5, 3)),
     "search": lambda p: _mag(p),
+    "guide": lambda p: (p.drawRoundedRect(QRectF(4, 3, 16, 18), 2, 2), p.drawLine(QPointF(8, 3), QPointF(8, 21)),
+                        p.drawLine(QPointF(11, 8), QPointF(17, 8)), p.drawLine(QPointF(11, 12), QPointF(17, 12))),
     "listmenu": lambda p: ([p.drawRect(QRectF(3.5, y - 1.2, 2.4, 2.4)) for y in (6, 12, 18)],
                            [p.drawLine(QPointF(9, y), QPointF(21, y)) for y in (6, 12, 18)]),
     "collapseall": lambda p: (_poly(p, [(6, 11), (12, 6), (18, 11)], False), _poly(p, [(6, 19), (12, 14), (18, 19)], False)),
@@ -304,7 +306,7 @@ MENU_ICONS = {
     "Ảnh / Word / Excel / PowerPoint → PDF…": "topdf", "Nhận dạng chữ (OCR) cho bản scan…": "ocr",
     "Nén giảm dung lượng…": "compress",
     "Ký số không hiện khung chữ ký…": "signhidden", "Gỡ mật khẩu": "unlock",
-    "Mở thư mục chứng thư gốc tin cậy": "certfolder", "Giới thiệu": "info", "Danh sách phím tắt": "keys",
+    "Mở thư mục chứng thư gốc tin cậy": "certfolder", "Giới thiệu": "info", "Danh sách phím tắt": "keys", "Hướng dẫn sử dụng": "guide",
     # menu chuột phải trong trang và trong bảng bookmark
     "Sao chép": "copy", "Tô sáng": "highlight", "Gạch chân": "underline", "Gạch ngang": "strike",
     "Sao chép hình ảnh": "copy", "Lưu hình ảnh thành file…": "saveimg", "Xoá hình ảnh khỏi trang": "delimg",
