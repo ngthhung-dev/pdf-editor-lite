@@ -43,13 +43,13 @@ jobs:
         timeout-minutes: 90
         shell: pwsh
         run: |
-          $a = @()
-          # chay tu dong khi day ma len (push): kem LibreOffice + Ollama, model tai luc cai
+          $a = @{}      # bang tham so (splat theo ten): mang chuoi se bi hieu la tham so vi tri
+          # chay tu dong khi day ma len (push): kem LibreOffice, co muc Ollama, model tai luc cai
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            if ("${{ inputs.libreoffice }}" -ne "true") { $a += "-NoLibreOffice" }
-            if ("${{ inputs.ollama }}" -ne "true") { $a += "-NoOllama" }
-            if ("${{ inputs.model }}" -ne "true") { $a += "-NoModel" }
-          } else { $a += "-NoModel" }
+            if ("${{ inputs.libreoffice }}" -ne "true") { $a.NoLibreOffice = $true }
+            if ("${{ inputs.ollama }}" -ne "true") { $a.NoOllama = $true }
+            if ("${{ inputs.model }}" -ne "true") { $a.NoModel = $true }
+          } else { $a.NoModel = $true }
           ./packaging/windows/build_windows.ps1 @a
       - name: Luu nhat ky build vao nhanh build-logs
         if: always()

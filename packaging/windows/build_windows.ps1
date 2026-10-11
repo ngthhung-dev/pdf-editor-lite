@@ -109,6 +109,7 @@ $hasRapid = Test-Path (Join-Path $rapid "rapidocr")
 # ---------------------------------------------------------------- 7. LibreOffice, Ollama, model
 Step "7/8  Tai LibreOffice / Ollama / model dich"
 $defs = @("/DAppVer=1.0.0")
+Note "tham so: NoLibreOffice=$NoLibreOffice NoOllama=$NoOllama NoModel=$NoModel Model=$Model"
 if ($hasRapid) { $defs += "/DWithRapid=1" }
 if (-not $NoLibreOffice) {
     $lo = Join-Path $vendor "LibreOffice.msi"
@@ -132,7 +133,9 @@ if (-not $NoOllama) {
         if (-not (Test-Path "$models\manifests")) {
             $ol = (Get-Command ollama -ErrorAction SilentlyContinue).Source
             if (-not $ol -and $env:CI) {          # may build tu dong: cai Ollama de keo model ve
-                Start-Process -FilePath (Join-Path $vendor "OllamaSetup.exe") -ArgumentList "/VERYSILENT", "/NORESTART" -Wait
+                # khong dung -Wait: trinh cai Ollama tu mo ung dung sau khi cai, -Wait se cho ca ung dung do va treo mai
+                $inst = Start-Process -FilePath (Join-Path $vendor "OllamaSetup.exe") -ArgumentList "/VERYSILENT", "/NORESTART" -PassThru
+                if (-not $inst.WaitForExit(900000)) { $inst.Kill(); Note "Cai Ollama qua 15 phut: bo qua viec kem model." }
                 $ol = "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe"
             }
             if ($ol -and (Test-Path $ol)) {
