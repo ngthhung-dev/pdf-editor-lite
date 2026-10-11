@@ -497,6 +497,84 @@ _MATH_WORDS = {"lim", "log", "loge", "sin", "cos", "tan", "cot", "sec", "csc", "
                "arcsin", "arccos", "arctan", "mol", "aq", "var", "cov", "vec", "bar", "hat", "for", "với", "và"}
 
 
+# từ nối đứng giữa các công thức ("x + y and y + x"): công thức giữ nguyên, riêng từ này vẫn phải dịch
+_LINKS = {"and", "or", "where", "if", "then", "with", "for", "so", "hence", "thus", "when", "while", "but", "not", "is",
+          "are", "as", "to", "from", "by", "of", "in", "on", "at", "that", "such", "all", "any", "some", "since", "because",
+          "therefore", "implies", "iff", "otherwise", "else", "resp", "versus", "vs", "equals", "let", "given", "between",
+          "et", "ou", "si", "donc", "avec", "pour", "und", "oder", "wenn", "dann", "mit", "für", "also", "con", "para",
+          "entonces", "donde", "cuando"}
+
+
+def _link_words(pix, px, text: str) -> list:
+    """Từ nối nằm trong một dòng công thức: [(từ, x0, x1)] tính theo điểm ảnh của hình. Vị trí lấy từ chính nét mực
+    trong ảnh (cụm nét có khoảng trống hai bên), nên chỉ trả về khi xác định được chắc chắn."""
+    toks = text.split()
+    hits = [k for k, t in enumerate(toks) if t.strip(".,;:").lower() in _LINKS and t.strip(".,;:").islower()]
+    if not hits or len(toks) < 2 or len(hits) > 4:
+        return []
+    x0, y0 = max(0, int(px[0])), max(0, int(px[1]))
+    x1, y1 = min(pix.width - 1, int(px[2])), min(pix.height - 1, int(px[3]))
+    w, h = x1 - x0 + 1, y1 - y0 + 1
+    if w < 20 or h < 6 or w * h > 400000:
+        return []
+    bg = [v * 255 for v in _box_colors(pix, x0, y0, x1, y1)[0]]
+    step = max(1, h // 24)
+    ink = []
+    for x in range(x0, x1 + 1):
+        on = False
+        for y in range(y0, y1 + 1, step):
+            c = pix.pixel(x, y)
+            if abs(c[0] - bg[0]) + abs(c[1] - bg[1]) + abs(c[2] - bg[2]) > 150:
+                on = True
+                break
+        ink.append(on)
+    segs = []                       # các cụm nét mực liền nhau (khe hẹp giữa các chữ cái của một từ thì nối lại)
+    start = None
+    gap = 0
+    join = max(2, int(0.16 * h))
+    for i, on in enumerate(ink + [False] * (join + 1)):
+        if on:
+            if start is None:
+                start = i
+            gap = 0
+        elif start is not None:
+            gap += 1
+            if gap > join:
+                segs.append([start, i - gap])
+                start = None
+    if len(segs) < 2:
+        return []
+    out = []
+    used = set()
+    pos = 0
+    spans = []
+    for t in toks:
+        spans.append((pos, pos + len(t)))
+        pos += len(t) + 1
+    total = max(1, pos - 1)
+    for k in hits:
+        word = toks[k].strip(".,;:")
+        centre = (spans[k][0] + spans[k][1]) / 2 / total * w
+        want = len(word) * 0.5 * h
+        best = None
+        for n, (a, b) in enumerate(segs):
+            if n in used or not 0.5 * want <= b - a + 1 <= 1.8 * want or abs((a + b) / 2 - centre) > 0.22 * w:
+                continue
+            left = a - segs[n - 1][1] if n else w
+            right = segs[n + 1][0] - b if n + 1 < len(segs) else w
+            side = min(left, right)
+            if side < 0.3 * h:
+                continue                 # dính sát công thức bên cạnh: không chắc là từ nào, bỏ qua
+            key = (-min(side, 2 * h) // max(1, h // 2), abs((a + b) / 2 - centre))
+            if best is None or key < best[0]:
+                best = (key, n)
+        if best is not None:
+            used.add(best[1])
+            a, b = segs[best[1]]
+            out.append((word, x0 + a, x0 + b + 1))
+    return out
+
+
 def prose_like(text: str) -> bool:
     """Dòng chữ trong ảnh có đáng dịch không: phải có lời văn, không phải công thức / ký hiệu / địa chỉ web.
     (Viết lại công thức toán, hoá bằng chữ thường sẽ làm hỏng ký hiệu, nên các dòng đó được giữ nguyên trong ảnh.)"""
@@ -580,6 +658,18 @@ def image_units(page, lines_for) -> list[dict]:
                 else:
                     text = (text + " " + row["text"]).strip()
             if not translatable(text) or not prose_like(text):
+                for row in g:                         # dòng công thức: chỉ dịch từ nối đứng giữa các công thức
+                    if prose_like(row["text"]):
+                        continue
+                    for word, wx0, wx1 in _link_words(pix, row["px"], row["text"]):
+                        r = row["rect"]
+                        wr = pymupdf.Rect(bbox.x0 + wx0 / z - 1, r.y0, bbox.x0 + wx1 / z + 1, r.y1)
+                        bgc, fgc = _box_colors(pix, wx0, row["px"][1], wx1, row["px"][3])
+                        mine.append({"kind": "img", "text": word, "plain": word, "marks": [], "underline": False,
+                                     "ul_rects": [], "bands": [], "rect": wr, "bg": bgc, "color": fgc,
+                                     "size": max(3.0, min(r.height * 0.72, 40)), "font": "Arial", "flags": 0,
+                                     "bold": False, "italic": False, "align": "center", "lines": [(pymupdf.Rect(wr), bgc)],
+                                     "room_y": r.y1 + 1, "link": True})
                 continue
             cols = [_box_colors(pix, *row["px"]) for row in g]
             hs = sorted(row["rect"].height for row in g)
@@ -606,6 +696,11 @@ def image_units(page, lines_for) -> list[dict]:
                     if "lh" in u:
                         u["lh"] = min(1.9, max(1.0, u["lh"] * u["size"] / med))
                     u["size"] = med
+        links = [u for u in mine if u.get("link")]
+        if links:                # từ nối giữa công thức: cùng một cỡ chữ với lời văn của trang
+            pool = sorted(u["size"] for u in mine if not u.get("link")) or sorted(u["size"] for u in links)
+            for u in links:
+                u["size"] = pool[len(pool) // 2]
         units += mine
     return units
 
@@ -777,9 +872,14 @@ def apply_page(page, units: list[dict], translations: list[str]) -> int:
             box = pymupdf.Rect(r.x0, r.y0 - 0.1 * size, r.x1 + 0.6, r.y1 + 0.3 * size)
             tall = pymupdf.Rect(box.x0, box.y0, box.x1, max(box.y1, room))
             line = pymupdf.Rect(r.x0, r.y0 - 0.15 * r.height, r.x1 + 0.6, r.y1 + 0.2 * r.height)
+            if u.get("link"):         # từ nối giữa hai công thức: viết giữa chỗ cũ, không xuống dòng
+                line_css = line_css.replace("white-space:nowrap;", "white-space:nowrap; text-align:center;")
+                line = pymupdf.Rect(line.x0 - 0.25 * r.height, line.y0, line.x1 + 0.25 * r.height, line.y1)
             # thử lần lượt: vừa khung gốc → xuống dòng vào chỗ trống bên dưới → cùng lắm mới thu nhỏ hẳn
             tries = [(box, wrap_css, 0.72), (tall, wrap_css, 0.6), (tall, wrap_css, 0)] if len(rows) > 1 else \
                     [(line, line_css, 0.72), (tall, wrap_css, 0.62), (line, line_css, 0)]
+            if u.get("link"):
+                tries = [(line, line_css, 0.6), (line, line_css, 0)]
             ok = False
             for rect, css, low in tries:
                 try:
