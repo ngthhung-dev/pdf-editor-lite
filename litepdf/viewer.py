@@ -396,6 +396,11 @@ class Viewer(QGraphicsView):
         self.sel_text = ""
         self.hits: list[tuple[int, pymupdf.Rect]] = []
         self.hit_pages: list[int] = []         # số trang của từng kết quả (song song với hits), để tra nhanh
+        self.diff_marks: dict[int, list] = {}  # so sánh hai tài liệu: trang -> các khung chữ khác với bên kia
+        self.diff_pages: set[int] = set()      # các trang chỉ có ở bên này
+        self.diff_gaps: dict[int, list] = {}   # trang -> vị trí mà bên kia có thêm chữ còn bên này thì không
+        self.diff_rgb = (234, 67, 53)
+        self.diff_focus = None                 # (trang, [khung]) của chỗ khác nhau đang xem
         self._scan: list[int] = []
         self._scan_pos = 0
         self._search_timer = QTimer(self, interval=0, timeout=self._search_tick)
@@ -674,6 +679,27 @@ class Viewer(QGraphicsView):
                 if pg < len(self.rects):
                     p.fillRect(self.to_scene(pg, r),
                                QColor(255, 140, 0, 130) if k == self.hit_idx else QColor(255, 235, 0, 90))
+        # chỗ khác nhau giữa hai tài liệu đang so sánh
+        if self.diff_marks or self.diff_pages or self.diff_gaps:
+            for i in self._visible(rect):
+                if i in self.diff_pages:         # cả trang chỉ có ở bên này: viền và phủ nhẹ cả trang
+                    r = self.rects[i]
+                    p.fillRect(r, QColor(self.diff_rgb[0], self.diff_rgb[1], self.diff_rgb[2], 28))
+                    p.setPen(QPen(QColor(*self.diff_rgb), 3 * px))
+                    p.setBrush(Qt.NoBrush)
+                    p.drawRect(r)
+                for r in self.diff_marks.get(i, ()):
+                    p.fillRect(self.to_scene(i, r).adjusted(-px, -px, px, px),
+                               QColor(self.diff_rgb[0], self.diff_rgb[1], self.diff_rgb[2], 85))
+                for r in self.diff_gaps.get(i, ()):       # bên kia có thêm chữ ở đây, bên này không có: vạch đánh dấu chỗ thiếu
+                    sr = self.to_scene(i, r)
+                    p.fillRect(QRectF(sr.left() - 3.5 * px, sr.top() - 2 * px, 3 * px, sr.height() + 4 * px),
+                               QColor(255, 140, 0, 230))
+            if self.diff_focus and self.diff_focus[0] < len(self.rects):
+                p.setPen(QPen(QColor(255, 140, 0), 2.2 * px))
+                p.setBrush(Qt.NoBrush)
+                for r in self.diff_focus[1]:
+                    p.drawRect(self.to_scene(self.diff_focus[0], r).adjusted(-2 * px, -2 * px, 2 * px, 2 * px))
         # vùng chữ đang chọn
         if self.sel_page is not None and self.sel_page < len(self.rects):
             for r in self.sel_rects:

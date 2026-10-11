@@ -51,7 +51,8 @@ SHORTCUTS = {
     # Xem
     "Phóng to": "Ctrl++", "Thu nhỏ": "Ctrl+-", "Kích thước thật (100%)": "Ctrl+0", "Vừa chiều rộng": "Ctrl+1",
     "Vừa cả trang": "Ctrl+2", "Hiện thanh bên (trang, bookmark)": "F4", "Ẩn thanh bên (trang, bookmark)": "F4", "So sánh song song hai tài liệu (gốc – dịch)": "F6",
-    "Bật/tắt cuộn đồng bộ khi so sánh": "F7", "Toàn màn hình": "F11",
+    "Bật/tắt cuộn đồng bộ khi so sánh": "F7", "Tô sáng chỗ khác nhau giữa hai tài liệu": "F8",
+    "Tới chỗ khác nhau tiếp theo": "F9", "Tới chỗ khác nhau trước đó": "Shift+F9", "Toàn màn hình": "F11",
     # Trang
     "Xoay trái 90°": "Ctrl+Shift+L", "Xoay phải 90°": "Ctrl+Shift+R", "Xoá trang đang chọn": "Ctrl+Shift+Del",
     "Nhân đôi trang": "Ctrl+Shift+D",
@@ -153,6 +154,17 @@ class DocTab(QWidget):
         self.active = self.own_viewer
         self.sync = True
         self._syncing = False
+        # tô sáng chỗ khác nhau giữa hai tài liệu đang so sánh
+        self.diff_on = False
+        self.diff_hunks: list[dict] = []
+        self.diff_idx = -1
+        self.diff_busy = False
+        self._diff_gen = 0
+        self._diff_words: dict = {"a": {}, "b": {}}      # bên -> {trang: các từ} (nhớ lại, trang nào sửa mới đọc lại)
+        self._diff_todo: list = []
+        self._diff_timer = QTimer(self, interval=0, timeout=self._diff_tick)
+        self._diff_delay = QTimer(self, singleShot=True, interval=450, timeout=self._diff_begin)
+        self._diff_worker = None
         self.own_head = QLabel()
         self.own_head.hide()
         self.own_head.setMinimumWidth(0)
@@ -214,6 +226,9 @@ class DocTab(QWidget):
         trên tài liệu đã đóng."""
         self._timer.stop()
         self._pending = []
+        self._diff_timer.stop()
+        self._diff_delay.stop()
+        self._diff_gen += 1
         for v in (self.own_viewer, self.partner):
             if v is not None:
                 v._rerender.stop()
@@ -337,7 +352,11 @@ class DocTab(QWidget):
         for head, v, kind in ((self.partner_head, self.partner, self.kinds[0]), (self.own_head, self.own_viewer, self.kinds[1])):
             on = v is self.active
             m = v.model
-            head.setText(f" {kind}: {'● ' if m.dirty else ''}{m.title}" + ("   —  đang thao tác bên này" if on else ""))
+            note = ""
+            if self.diff_on:
+                note = "   ·  đang dò chỗ khác nhau…" if self.diff_busy else \
+                    f"   ·  {len(self.diff_hunks)} chỗ khác nhau" if self.diff_hunks else "   ·  nội dung chữ giống nhau"
+            head.setText(f" {kind}: {'● ' if m.dirty else ''}{m.title}" + ("   —  đang thao tác bên này" if on else "") + note)
             head.setStyleSheet("QLabel{padding:4px 6px;font-weight:%s;color:%s;background:%s;border-bottom:2px solid %s;}"
                                % (("600", "#ffffff", "#1a73e8", "#1a73e8") if on else ("400", "#3c4043", "#e8eaed", "#c4c7cc")))
 
@@ -372,8 +391,144 @@ class DocTab(QWidget):
             a.zoomChanged.connect(lambda *_, a=a, b=b: self._follow_zoom(a, b))
         other.own_model.stateChanged.connect(self._paint_heads)
         self.own_model.stateChanged.connect(self._paint_heads)
+        other.own_model.changed.connect(self._diff_changed_a)
+        self.own_model.changed.connect(self._diff_changed_b)
+        v.diff_rgb, self.own_viewer.diff_rgb = (234, 67, 53), (30, 160, 70)
         self._paint_heads()
         QTimer.singleShot(0, self, self._fit_both)
+
+    # ---- tô sáng chỗ khác nhau
+    def _diff_changed_a(self, page, structure):
+        self._diff_invalidate("a", page, structure)
+
+    def _diff_changed_b(self, page, structure):
+        self._diff_invalidate("b", page, structure)
+
+    def _diff_invalidate(self, side: str, page, structure):
+        if page == "toc":
+            return
+        if isinstance(page, int) and not structure:
+            self._diff_words[side].pop(page, None)
+        else:
+            self._diff_words[side] = {}
+        if self.diff_on:
+            self._diff_delay.start()             # sửa xong một nhịp mới dò lại, không dò sau từng nét vẽ
+
+    def _diff_clear(self):
+        for v in (self.own_viewer, self.partner):
+            if v is not None:
+                v.diff_marks, v.diff_pages, v.diff_gaps, v.diff_focus = {}, set(), {}, None
+                v.viewport().update()
+        self.diff_hunks, self.diff_idx = [], -1
+
+    def set_diff(self, on: bool):
+        self.diff_on = bool(on) and self.partner is not None
+        self._diff_timer.stop()
+        self._diff_delay.stop()
+        self._diff_gen += 1
+        self.diff_busy = False
+        if not self.diff_on:
+            self._diff_clear()
+            self._paint_heads()
+            return
+        self._diff_begin()
+
+    def _diff_begin(self):
+        if not self.diff_on or self.partner is None:
+            return
+        self._diff_gen += 1
+        na, nb = self.partner.model.page_count, self.own_model.page_count
+        self._diff_todo = [("a", i) for i in range(na) if i not in self._diff_words["a"]] + \
+                          [("b", i) for i in range(nb) if i not in self._diff_words["b"]]
+        self.diff_busy = True
+        self._paint_heads()
+        self._diff_timer.start()
+
+    def _diff_tick(self):
+        """Đọc dần chữ của các trang (mỗi nhịp khoảng 25 ms), xong thì giao cho luồng phụ so."""
+        import time
+        from . import diffing
+        if not self.diff_on or self.partner is None:
+            return self._diff_timer.stop()
+        docs = {"a": self.partner.model.doc, "b": self.own_model.doc}
+        end = time.perf_counter() + 0.025
+        while self._diff_todo and time.perf_counter() < end:
+            side, i = self._diff_todo.pop()
+            try:
+                self._diff_words[side][i] = diffing.page_words(docs[side][i])
+            except Exception:
+                self._diff_words[side][i] = []
+        if self._diff_todo:
+            return
+        self._diff_timer.stop()
+        a = [self._diff_words["a"].get(i, []) for i in range(docs["a"].page_count)]
+        b = [self._diff_words["b"].get(i, []) for i in range(docs["b"].page_count)]
+        w = DiffWorker(self._diff_gen, a, b, self)
+        w.done.connect(self._diff_done)
+        w.finished.connect(w.deleteLater)
+        self._diff_worker = w
+        w.start()
+
+    def _diff_done(self, gen: int, hunks):
+        if gen != self._diff_gen or not self.diff_on or self.partner is None:
+            return                               # kết quả của lần dò cũ (tài liệu đã đổi tiếp): bỏ
+        self.diff_busy = False
+        keep = self.diff_idx
+        self._diff_clear()
+        self.diff_hunks = hunks or []
+        for v, key in ((self.partner, "a"), (self.own_viewer, "b")):
+            marks: dict = {}
+            pages: set = set()
+            gaps: dict = {}
+            for h in self.diff_hunks:
+                pages.update(h[key + "_pages"])
+                for pg, r in h[key]:
+                    if pg not in h[key + "_pages"]:
+                        marks.setdefault(pg, []).append(pymupdf.Rect(r))
+                if not h[key] and not h[key + "_pages"] and h.get(key + "_at"):
+                    gaps.setdefault(h[key + "_at"][0], []).append(pymupdf.Rect(h[key + "_at"][1]))
+            v.diff_marks, v.diff_pages, v.diff_gaps = marks, pages, gaps
+            v.viewport().update()
+        self.diff_idx = min(keep, len(self.diff_hunks) - 1) if keep >= 0 else -1
+        self._paint_heads()
+        self.main._update_ui()
+        n = len(self.diff_hunks)
+        self.main.msg(f"Tìm thấy {n} chỗ khác nhau về chữ. F9: tới chỗ tiếp theo, Shift+F9: chỗ trước. Bên trái tô đỏ, bên phải tô xanh."
+                      if n else "Nội dung chữ của hai tài liệu giống nhau (app so theo chữ; bản scan cần OCR trước).", 15000)
+
+    def goto_diff(self, step: int):
+        n = len(self.diff_hunks)
+        if not n or self.partner is None:
+            return
+        if self.diff_idx < 0:                    # lần đầu: bắt đầu từ chỗ khác nhau gần trang đang xem
+            cur = self.own_viewer.current_page()
+            def page_of(h):
+                return h["b"][0][0] if h["b"] else h["b_at"][0] if h.get("b_at") else (h["b_pages"] or [0])[0]
+            first = next((k for k, h in enumerate(self.diff_hunks) if page_of(h) >= cur), 0)
+            self.diff_idx = first - (1 if step > 0 else 0)
+        self.diff_idx = (self.diff_idx + step) % n
+        h = self.diff_hunks[self.diff_idx]
+        self._syncing = True                     # mỗi bên tự tới đúng chỗ của mình, không kéo nhau theo tỉ lệ cuộn
+        try:
+            for v, key in ((self.partner, "a"), (self.own_viewer, "b")):
+                items, at, pages = h[key], h.get(key + "_at"), h[key + "_pages"]
+                if items:
+                    pg = items[0][0]
+                    rects = [pymupdf.Rect(r) for p_, r in items if p_ == pg]
+                    v.diff_focus = (pg, rects)
+                    v.centerOn(v.to_scene(pg, rects[0]).center())      # hai bên cùng đưa chỗ khác nhau vào giữa khung
+                elif pages:
+                    v.diff_focus = None
+                    v.goto_page(pages[0])
+                elif at:                         # bên này không có gì: tới vị trí tương ứng để thấy chỗ bị thiếu
+                    v.diff_focus = None
+                    v.centerOn(v.to_scene(at[0], pymupdf.Rect(at[1])).center())
+                else:
+                    v.diff_focus = None
+                v.viewport().update()
+        finally:
+            self._syncing = False
+        self.main.msg(f"Chỗ khác nhau {self.diff_idx + 1}/{n}")
 
     def _fit_both(self):
         if self.partner is None:
@@ -418,7 +573,13 @@ class DocTab(QWidget):
     def stop_compare(self):
         if self.partner is None:
             return
+        self.set_diff(False)
         v, box, other = self.partner, self.partner_box, self.partner_tab
+        for m_, fn in ((other.own_model, self._diff_changed_a), (self.own_model, self._diff_changed_b)):
+            try:
+                m_.changed.disconnect(fn)
+            except (RuntimeError, TypeError):
+                pass
         self.partner = self.partner_tab = None
         self.active = self.own_viewer
         for m in (other.own_model, self.own_model):
@@ -461,6 +622,22 @@ class TranslateWorker(QThread):
             self.error = str(e)
         except Exception as e:
             self.error = f"{type(e).__name__}: {e}"
+
+
+class DiffWorker(QThread):
+    """So hai danh sách từ ở luồng phụ (tài liệu dài có thể mất vài giây) để cửa sổ không đứng."""
+    done = Signal(int, object)
+
+    def __init__(self, gen: int, a: list, b: list, parent=None):
+        super().__init__(parent)
+        self.gen, self.a, self.b = gen, a, b
+
+    def run(self):
+        from . import diffing
+        try:
+            self.done.emit(self.gen, diffing.compare(self.a, self.b))
+        except Exception:
+            self.done.emit(self.gen, None)
 
 
 class HoverMenus(QObject):
@@ -701,11 +878,16 @@ class MainWindow(QMainWindow):
         self.a_side = A("Hiện thanh bên (trang, bookmark)", self.side_toggle, "F4", "sidebar", menu=m)
         m.addSeparator()
         self.a_cmp = A("So sánh song song hai tài liệu (gốc – dịch)", self.compare, "F6", "compare", menu=m,
-                       tip="Đặt bản gốc và bản dịch cạnh nhau để rà soát; sửa được trực tiếp ở cả hai bên")
+                       tip="Đặt hai tài liệu (hai phiên bản, hoặc bản gốc và bản dịch) cạnh nhau; sửa được trực tiếp ở cả hai bên")
         self.a_sync = A("Bật/tắt cuộn đồng bộ khi so sánh", self.toggle_sync, "F7", "syncscroll", menu=m,
                         tip="Hai bên cuộn và thu phóng cùng nhau; tắt để canh lại vị trí từng bên")
+        self.a_diff = A("Tô sáng chỗ khác nhau giữa hai tài liệu", self.toggle_diff, "F8", "diff", menu=m,
+                        tip="Đánh dấu những chữ khác nhau giữa hai tài liệu đang so sánh (trái: đỏ, phải: xanh)")
+        self.a_dnext = A("Tới chỗ khác nhau tiếp theo", lambda t: t.goto_diff(1), "F9", "diffnext", menu=m)
+        self.a_dprev = A("Tới chỗ khác nhau trước đó", lambda t: t.goto_diff(-1), "Shift+F9", "diffprev", menu=m)
         self.a_cmp.setCheckable(True)
         self.a_sync.setCheckable(True)
+        self.a_diff.setCheckable(True)
         m.addSeparator()
         A("Toàn màn hình", lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen(), "F11",
           doc=False, menu=m, guard=False)
@@ -892,10 +1074,14 @@ class MainWindow(QMainWindow):
         """Các mục chỉ dùng được khi có bản dịch / có tài liệu để so sánh: khoá ngay (cả nút, menu lẫn phím tắt)."""
         comparing = t.partner is not None
         self._set("Rà soát / sửa câu dịch của trang này…", self._review_tab(t) is not None)
-        self.a_cmp.setEnabled(comparing or len(self.doc_tabs()) > 1)
+        self.a_cmp.setEnabled(True)              # chỉ mở một tài liệu vẫn bấm được: app hỏi chọn file thứ hai
         self.a_cmp.setChecked(comparing)
         self.a_sync.setEnabled(comparing)
         self.a_sync.setChecked(comparing and t.sync)
+        self.a_diff.setEnabled(comparing)
+        self.a_diff.setChecked(comparing and t.diff_on)
+        for a_ in (self.a_dnext, self.a_dprev):
+            a_.setEnabled(comparing and t.diff_on and bool(t.diff_hunks))
 
     def _dim_unavailable(self):
         self.recent_menu.setEnabled(bool(self.cfg.get("recent")))   # không dò ổ đĩa mỗi lần cập nhật giao diện
@@ -938,7 +1124,7 @@ class MainWindow(QMainWindow):
         tb.setIconSize(QSize(22, 22))
         self.addToolBar(tb)
         for a in (self.a_open, self.a_save, self.a_print, None, self.a_undo, self.a_redo, None, self.a_side,
-                  self.a_cmp, self.a_sync,
+                  self.a_cmp, self.a_sync, self.a_diff, self.a_dnext,
                   self.a_zout):
             tb.addSeparator() if a is None else tb.addAction(a)
         self.zoom_box = QComboBox()
@@ -1151,9 +1337,15 @@ class MainWindow(QMainWindow):
             t.stop_compare()
             return self.msg("Đã tắt so sánh song song.")
         others = [x for x in self.doc_tabs() if x is not t]
-        if not others:
-            return self.info("Cần mở ít nhất hai tài liệu để so sánh.\nVí dụ: mở file gốc, dịch nó (Chuyển đổi → Dịch tài liệu), "
-                             "rồi bấm lại mục này.")
+        if not others:                            # mới mở một tài liệu: chọn luôn file thứ hai để so
+            path, _ = QFileDialog.getOpenFileName(self, f"Chọn file để so sánh với “{t.own_model.title}”",
+                                                  self.cfg.get("last_dir", ""), OPEN_FILTER)
+            if not path:
+                return
+            other = self.open_path(path)
+            if other is None or other is t:
+                return
+            return self.start_compare(other, t, ("Tài liệu 1", "Tài liệu 2"))
         back = [x for x in others if x.source_tab is t]
         if t.source_tab in others:
             return self.start_compare(t, t.source_tab)
@@ -1174,6 +1366,17 @@ class MainWindow(QMainWindow):
         t.start_compare(other, kinds)
         self._update_ui()
         self.msg("Đang so sánh song song. Bấm vào bên nào thì sửa, lưu, hoàn tác… áp dụng cho bên đó. Bấm F6 để tắt.", 15000)
+        if kinds[1] != "Bản dịch":               # so hai file thường: tô sáng luôn chỗ khác nhau (gốc – dịch thì chữ nào cũng khác)
+            t.set_diff(True)
+            self._update_ui()
+
+    def toggle_diff(self, t: DocTab):
+        if t.partner is None:
+            return
+        t.set_diff(not t.diff_on)
+        self._update_ui()
+        if not t.diff_on:
+            self.msg("Đã tắt tô sáng chỗ khác nhau.")
 
     def toggle_sync(self, t: DocTab):
         t.sync = not t.sync
