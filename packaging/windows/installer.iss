@@ -118,6 +118,10 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{a
 Root: HKA; Subkey: "Software\Classes\PDFEditorLite.pdf"; ValueType: string; ValueData: "Tài liệu PDF"; Flags: uninsdeletekey; Tasks: assocpdf
 Root: HKA; Subkey: "Software\Classes\PDFEditorLite.pdf\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"; Tasks: assocpdf
 Root: HKA; Subkey: "Software\Classes\PDFEditorLite.pdf\shell\open\command"; ValueType: string; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: assocpdf
+; Khung Preview (Alt+P) va anh thu nho cua Explorer do mot "preview handler" ve, tra theo kieu file dang lam mac dinh.
+; App khong co bo ve rieng: muon lai bo ve PDF co san tren may (Microsoft Edge, Acrobat, Foxit...) de khung Preview van hien noi dung.
+Root: HKA; Subkey: "Software\Classes\PDFEditorLite.pdf\shellex\{{8895b1c6-b41f-4c1c-a562-0d564250836f}"; ValueType: string; ValueData: "{code:PdfShellHandler|preview}"; Check: HasPdfShellHandler('preview'); Tasks: assocpdf
+Root: HKA; Subkey: "Software\Classes\PDFEditorLite.pdf\shellex\{{E357FCCD-A995-4576-B01F-234630154E96}"; ValueType: string; ValueData: "{code:PdfShellHandler|thumb}"; Check: HasPdfShellHandler('thumb'); Tasks: assocpdf
 Root: HKA; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "PDFEditorLite.pdf"; ValueData: ""; Flags: uninsdeletevalue; Tasks: assocpdf
 Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "{#AppName}"; Flags: uninsdeletekey; Tasks: assocpdf
 Root: HKA; Subkey: "Software\Classes\Applications\{#AppExe}\SupportedTypes"; ValueType: string; ValueName: ".pdf"; ValueData: ""; Tasks: assocpdf
@@ -140,6 +144,36 @@ Filename: "{code:OllamaExe}"; Parameters: "pull {#Model}"; Components: ollama\mo
 Filename: "{app}\{#AppExe}"; Description: "Mở {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+function PdfShellHandler(Kind: String): String;
+var
+  Ids: array[0..6] of String;
+  I, Root: Integer;
+  S: String;
+begin
+  Result := '';
+  if Kind = 'preview' then Kind := '{8895b1c6-b41f-4c1c-a562-0d564250836f}' else Kind := '{E357FCCD-A995-4576-B01F-234630154E96}';
+  Ids[0] := 'MSEdgePDF'; Ids[1] := 'AcroExch.Document.DC'; Ids[2] := 'AcroExch.Document'; Ids[3] := 'Acrobat.Document.DC';
+  Ids[4] := 'FoxitReader.Document'; Ids[5] := 'FoxitPhantomPDF.Document'; Ids[6] := 'SystemFileAssociations\.pdf';
+  for I := 0 to 6 do
+    if RegQueryStringValue(HKCR, Ids[I] + '\shellex\' + Kind, '', S) and (S <> '') then
+    begin
+      Result := S;
+      Exit;
+    end;
+  { Edge co san tren Windows 10/11: bo ve PDF cua no cho khung Preview }
+  if CompareText(Kind, '{8895b1c6-b41f-4c1c-a562-0d564250836f}') = 0 then
+  begin
+    if IsWin64 then Root := HKCR64 else Root := HKCR;
+    if RegKeyExists(Root, 'CLSID\{3A84F9C2-6164-485C-A7D9-4B27F8AC009E}') then
+      Result := '{3A84F9C2-6164-485C-A7D9-4B27F8AC009E}';
+  end;
+end;
+
+function HasPdfShellHandler(Kind: String): Boolean;
+begin
+  Result := PdfShellHandler(Kind) <> '';
+end;
+
 function HasLibreOffice(): Boolean;
 begin
   Result := FileExists(ExpandConstant('{commonpf}\LibreOffice\program\soffice.exe'))
