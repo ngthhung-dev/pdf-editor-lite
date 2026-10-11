@@ -77,7 +77,7 @@ SHORTCUTS = {
     "Đặt mật khẩu cho file…": "Ctrl+Shift+P", "Gỡ mật khẩu": "Ctrl+Shift+U",
     "Mở thư mục chứng thư gốc tin cậy": "Ctrl+Alt+R",
     # Trợ giúp
-    "Hướng dẫn sử dụng": "F1", "Danh sách phím tắt": "Ctrl+F1", "Giới thiệu": "Shift+F1",
+    "Hướng dẫn sử dụng": "F1", "Hướng dẫn chi tiết có hình minh hoạ (PDF)": "Ctrl+Shift+F1", "Danh sách phím tắt": "Ctrl+F1", "Giới thiệu": "Shift+F1",
 }
 SHOW_ONLY = {"Xoá hình ảnh đang chọn khỏi trang", "Xoá ghi chú/ảnh đang chọn"}
 
@@ -757,6 +757,7 @@ class MainWindow(QMainWindow):
         # --- Trợ giúp
         m = mb.addMenu("Trợ &giúp")
         A("Hướng dẫn sử dụng", self.show_guide, doc=False, menu=m, guard=False)
+        A("Hướng dẫn chi tiết có hình minh hoạ (PDF)", self.open_manual, doc=False, menu=m, guard=False)
         A("Danh sách phím tắt", self.show_shortcuts, doc=False, menu=m, guard=False)
         A("Giới thiệu", self.about, doc=False, menu=m, guard=False)
         self._apply_shortcuts()
@@ -788,6 +789,17 @@ class MainWindow(QMainWindow):
             if rows:
                 out.append((act.text().replace("&&", "\x00").replace("&", "").replace("\x00", "&"), rows))
         return out
+
+    def open_manual(self):
+        """Mở file hướng dẫn chi tiết (PDF kèm theo app) ở một tab."""
+        name = "Huong dan su dung PDF Editor Lite.pdf"
+        roots = [getattr(sys, "_MEIPASS", ""), os.path.join(tools.app_dir(), "_internal"), tools.app_dir()]
+        for root in roots:
+            path = os.path.join(root, "assets", name) if root else ""
+            if path and os.path.isfile(path):
+                self.open_path(path)
+                return
+        self.info("Không tìm thấy file hướng dẫn chi tiết kèm theo app. Hãy xem bản tóm tắt ở Trợ giúp → Hướng dẫn sử dụng (F1).")
 
     def show_guide(self):
         """Hướng dẫn sử dụng, kèm tình trạng các thành phần tuỳ chọn trên máy này."""

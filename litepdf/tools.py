@@ -1446,6 +1446,57 @@ def merge_docs(parts: list, progress=None, size: str | None = None, orientation:
 
 
 # ------------------------------------------------------------ hình ảnh gốc trong trang
+def _xobject_images(doc, xref: int, depth: int = 0, seen=None) -> list[tuple]:
+    """Các ảnh nằm trong một Form XObject (kể cả lồng nhau): [(xref, rộng, cao)]."""
+    seen = seen if seen is not None else set()
+    if xref in seen or depth > 4:
+        return []
+    seen.add(xref)
+    out = []
+    try:
+        kind, val = doc.xref_get_key(xref, "Resources/XObject")
+        if kind == "xref":
+            val = doc.xref_object(int(val.split()[0]))
+    except Exception:
+        return out
+    for m in re.finditer(r"(\d+)\s+0\s+R", val or ""):
+        x = int(m.group(1))
+        try:
+            sub = doc.xref_get_key(x, "Subtype")[1]
+            if sub == "/Image":
+                out.append((x, int(doc.xref_get_key(x, "Width")[1]), int(doc.xref_get_key(x, "Height")[1])))
+            elif sub == "/Form":
+                out += _xobject_images(doc, x, depth + 1, seen)
+        except Exception:
+            continue
+    return out
+
+
+def _annot_image_xref(page, info: dict) -> int:
+    """Ảnh nằm trong ghi chú / con dấu / khung chữ ký (không thuộc nội dung trang): tìm đúng ảnh gốc của nó."""
+    doc = page.parent
+    r = info["bbox"]
+    best = 0
+    try:
+        items = list(page.annots() or []) + list(page.widgets() or [])
+    except Exception:
+        items = []
+    for an in items:
+        try:
+            if not pymupdf.Rect(an.rect).intersects(r):
+                continue
+            kind, val = doc.xref_get_key(an.xref, "AP/N")
+            if kind != "xref":
+                continue
+            for x, w, h in _xobject_images(doc, int(val.split()[0])):
+                if (w, h) == (info.get("width"), info.get("height")):
+                    return x
+                best = best or x
+        except Exception:
+            continue
+    return best
+
+
 def page_images(page) -> list[dict]:
     """Các hình ảnh nằm trong nội dung trang: [{'bbox': Rect, 'xref': int, 'width': px, 'height': px}, ...]."""
     out = []
@@ -1457,7 +1508,11 @@ def page_images(page) -> list[dict]:
         r = pymupdf.Rect(d["bbox"])
         if r.is_empty or r.width < 4 or r.height < 4:
             continue
-        out.append({"bbox": r, "xref": d.get("xref", 0), "width": d.get("width", 0), "height": d.get("height", 0)})
+        info = {"bbox": r, "xref": d.get("xref", 0), "width": d.get("width", 0), "height": d.get("height", 0)}
+        if not info["xref"]:          # ảnh chèn dạng con dấu / chữ ký: nằm trong ghi chú chứ không trong nội dung trang
+            info["xref"] = _annot_image_xref(page, info)
+            info["annot"] = True
+        out.append(info)
     return out
 
 
@@ -1490,7 +1545,7 @@ def image_pixmap(doc, page, info: dict):
         z = max(1.0, min(6.0, (info.get("width") or 0) / max(1.0, r.width))) if info.get("width") else 3.0
         clip = r * page.rotation_matrix if page.rotation else r
         clip.normalize()
-        pix = page.get_pixmap(matrix=pymupdf.Matrix(z, z), clip=clip, alpha=False, annots=False)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(z, z), clip=clip, alpha=False, annots=bool(info.get("annot")))
     return pix
 
 
@@ -1517,6 +1572,12 @@ def save_image(doc, page, info: dict, path: str) -> None:
 def delete_image(page, info: dict) -> None:
     """Gỡ một hình ảnh khỏi trang (chữ và nét vẽ xung quanh giữ nguyên)."""
     r = info["bbox"]
+    if info.get("annot"):        # ảnh chèn dạng con dấu / chữ ký: xoá chính ghi chú đó (khung chữ ký số thì không đụng tới)
+        for an in list(page.annots() or []):
+            if an.type[1] == "Stamp" and (pymupdf.Rect(an.rect) & r).get_area() > 0.5 * r.get_area():
+                page.delete_annot(an)
+                return
+        raise ValueError("Hình này thuộc khung chữ ký số hoặc ô biểu mẫu nên không xoá riêng được.")
     c = (r.tl + r.br) / 2
     w, h = max(1.0, r.width * 0.1), max(1.0, r.height * 0.1)
     page.add_redact_annot(pymupdf.Rect(c.x - w, c.y - h, c.x + w, c.y + h), fill=False, cross_out=False)
