@@ -1715,7 +1715,7 @@ class SplitDialog(QDialog):
                 parts.append(f"<span style='color:#b06000'>({missing} trang không nằm trong khoảng nào nên sẽ "
                              f"không có trong các file tách)</span>")
             if len(self.plan) > 100:
-                parts.append("<span style='color:#b06000'>Số file khá nhiều, hãy chắc là bro muốn vậy.</span>")
+                parts.append("<span style='color:#b06000'>Số file khá nhiều, hãy chắc là bạn muốn vậy.</span>")
             if len(self.plan) == 1 and len(used) == n:
                 parts.append("<span style='color:#b06000'>Kết quả giống hệt file gốc, chưa tách gì.</span>")
             self.result_lb.setText(" ".join(parts))
@@ -1968,7 +1968,7 @@ class TranslateDialog(QDialog):
         from . import tm
         self.mem = tm.memory(data_dir())
         self.use_tm = QCheckBox("Dùng bộ nhớ dịch (câu đã dịch được lấy lại ngay)")
-        self.use_tm.setToolTip("Mỗi câu đã dịch (và câu bro tự sửa trong bảng rà soát) được lưu trên máy này.\n"
+        self.use_tm.setToolTip("Mỗi câu đã dịch (và câu bạn tự sửa trong bảng rà soát) được lưu trên máy này.\n"
                                "Dịch lại cùng tài liệu sẽ gần như tức thì và giữ đúng những chỗ đã sửa.\n"
                                "Bỏ tích nếu muốn máy dịch lại toàn bộ từ đầu (ví dụ sau khi đổi lĩnh vực hoặc bảng thuật ngữ).")
         self.use_tm.setChecked(saved.get("tm", True))
@@ -2208,7 +2208,7 @@ class TranslateDialog(QDialog):
                       "cải thiện sản phẩm của họ: không nên dùng cho tài liệu mật.",
             "google": "Nội dung trang được gửi lên Google Translate. Không chọn được lĩnh vực hay bảng thuật ngữ; "
                       "chất lượng ở mức thông thường, không đạt chuẩn chuyên ngành.",
-            "openai": "Nội dung trang được gửi tới máy chủ bro khai báo. Nếu đó là AI chạy ngay trên máy (Ollama, "
+            "openai": "Nội dung trang được gửi tới máy chủ bạn khai báo. Nếu đó là AI chạy ngay trên máy (Ollama, "
                       "LM Studio) thì nội dung không rời khỏi máy."}[kind])
         self._relayout()
 
@@ -2220,7 +2220,7 @@ class TranslateDialog(QDialog):
         self.tm_lb.setText(f"Bộ nhớ dịch: {n} câu, lưu trên máy này")
 
     def _clear_tm(self):
-        if QMessageBox.question(self, "Dịch", "Xoá toàn bộ các câu đã lưu trong bộ nhớ dịch (kể cả câu bro đã tự sửa)?") \
+        if QMessageBox.question(self, "Dịch", "Xoá toàn bộ các câu đã lưu trong bộ nhớ dịch (kể cả câu bạn đã tự sửa)?") \
                 == QMessageBox.Yes:
             self.mem.clear()
             self._tm_count()
@@ -2403,7 +2403,7 @@ class OcrDialog(QDialog):
             self.lang.setEnabled(ok)
             note = ("Model PaddleOCR chạy hoàn toàn trên máy, nội dung không gửi đi đâu. Lớp chữ ẩn được đặt lên trang gốc nên "
                     "hình giữ nguyên độ nét. Chậm hơn Tesseract (vài giây mỗi trang). Model tiếng Việt được tải về ở lần "
-                    "dùng đầu tiên; chữ có nhiều dấu vẫn có thể sai, nên so thử với Tesseract trên tài liệu của bro.")
+                    "dùng đầu tiên; chữ có nhiều dấu vẫn có thể sai, nên so thử với Tesseract trên tài liệu của bạn.")
             if not ok:
                 note = "RapidOCR chưa được cài trong app. Bấm nút “Cài RapidOCR…” bên dưới (cần mạng, làm một lần)."
         else:
