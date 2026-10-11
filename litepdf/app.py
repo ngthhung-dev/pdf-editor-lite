@@ -36,7 +36,13 @@ TOPDF_FILTER = ("Ảnh và file văn phòng (*.png *.jpg *.jpeg *.bmp *.gif *.ti
                 "Ảnh (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp);;"
                 "Word (*.doc *.docx *.odt *.rtf);;Excel (*.xls *.xlsx *.ods);;PowerPoint (*.ppt *.pptx *.odp);;Tất cả (*)")
 
-# Bảng phím tắt của toàn bộ chức năng (tên mục menu -> phím)
+# Bảng phím tắt (tên mục menu -> phím). Quy ước để dễ nhớ, mỗi nhóm một kiểu:
+#   Ctrl + chữ          thao tác cơ bản quen thuộc (mở, lưu, in, hoàn tác, tìm, bookmark)
+#   Ctrl + Shift + chữ  làm việc với trang và với cả tài liệu (xoay, xoá, chèn, gộp, tách, ký, mật khẩu)
+#   Ctrl + Alt + chữ    chuyển đổi / xuất ra (dịch, OCR, nén, PDF → Word, Excel, ảnh...)
+#   Phím F              xem và so sánh; F1 trợ giúp
+#   Một chữ cái         chọn công cụ sửa, vẽ
+# Mục ít dùng hoặc dễ gây hậu quả (xoá tất cả bookmark, gỡ mật khẩu...) không đặt phím tắt.
 SHORTCUTS = {
     # Tệp
     "Mở…": "Ctrl+O", "PDF trắng mới": "Ctrl+N", "Ảnh / Word / Excel / PowerPoint → PDF…": "Ctrl+Shift+O",
@@ -50,33 +56,32 @@ SHORTCUTS = {
     "Làm phẳng ghi chú (gắn chết vào trang)": "Ctrl+Shift+F",
     # Xem
     "Phóng to": "Ctrl++", "Thu nhỏ": "Ctrl+-", "Kích thước thật (100%)": "Ctrl+0", "Vừa chiều rộng": "Ctrl+1",
-    "Vừa cả trang": "Ctrl+2", "Hiện thanh bên (trang, bookmark)": "F4", "Ẩn thanh bên (trang, bookmark)": "F4", "So sánh song song hai tài liệu (gốc – dịch)": "F6",
-    "Bật/tắt cuộn đồng bộ khi so sánh": "F7", "Tô sáng chỗ khác nhau giữa hai tài liệu": "F8",
+    "Vừa cả trang": "Ctrl+2", "Hiện thanh bên (trang, bookmark)": "F4", "Ẩn thanh bên (trang, bookmark)": "F4",
+    "So sánh song song hai tài liệu (gốc – dịch)": "F6", "Bật/tắt cuộn đồng bộ khi so sánh": "F7",
+    "Tô sáng chỗ khác nhau giữa hai tài liệu": "F8",
     "Tới chỗ khác nhau tiếp theo": "F9", "Tới chỗ khác nhau trước đó": "Shift+F9", "Toàn màn hình": "F11",
     # Trang
     "Xoay trái 90°": "Ctrl+Shift+L", "Xoay phải 90°": "Ctrl+Shift+R", "Xoá trang đang chọn": "Ctrl+Shift+Del",
     "Nhân đôi trang": "Ctrl+Shift+D",
     "Chuyển trang lên trước": "Ctrl+Shift+Up", "Chuyển trang xuống sau": "Ctrl+Shift+Down",
-    "Chèn trang trắng sau trang này": "Ctrl+Shift+N", "Chèn file khác vào sau trang này…": "Ctrl+Alt+I",
-    "Đánh số trang…": "Ctrl+Alt+N", "Đóng dấu chìm (watermark)…": "Ctrl+Alt+W",
+    "Chèn trang trắng sau trang này": "Ctrl+Shift+N", "Chèn file khác vào sau trang này…": "Ctrl+Shift+A",
+    "Đánh số trang…": "Ctrl+Shift+G", "Đóng dấu chìm (watermark)…": "Ctrl+Shift+W",
     # Công cụ (một phím, không cần giữ Ctrl)
     "Bàn tay (di chuyển, chọn ghi chú)": "H", "Chọn chữ / hình ảnh": "V", "Sửa chữ gốc": "E", "Thêm chữ": "T",
     "Chèn ảnh": "I", "Xoá trắng một vùng": "X", "Tô sáng": "M", "Gạch chân": "U", "Gạch ngang": "K",
     "Ghi chú dán": "N", "Hình chữ nhật": "R", "Hình elip": "O", "Đường thẳng": "L", "Mũi tên": "A", "Vẽ tự do": "P",
-    # Bookmark
+    # Bookmark (đều là phím B)
     "Thêm bookmark tại vị trí đang xem": "Ctrl+B", "Thêm bookmark con của mục đang chọn": "Ctrl+Shift+B",
     "Tự tạo bookmark từ các tiêu đề…": "Ctrl+Alt+B",
-    "Tạo bookmark cho từng trang": "Ctrl+Alt+P", "Xoá tất cả bookmark": "Ctrl+Alt+X",
-    # Chuyển đổi
-    "Dịch tài liệu sang ngôn ngữ khác…": "Ctrl+Alt+L", "Rà soát / sửa câu dịch của trang này…": "Ctrl+Alt+G", "PDF → Word (.docx)…": "Ctrl+Alt+D", "PDF → Excel (.xlsx)…": "Ctrl+Alt+E", "PDF → Ảnh (PNG/JPG)…": "Ctrl+Alt+J",
-    "PDF → Văn bản (.txt)…": "Ctrl+Alt+T", "Xuất mọi hình ảnh trong PDF ra thư mục…": "Ctrl+Alt+M",
+    # Chuyển đổi (Ctrl+Alt + chữ đầu của thứ cần ra: Dịch, Word, Excel, Image, Text, HTML, OCR, Nén)
+    "Dịch tài liệu sang ngôn ngữ khác…": "Ctrl+Alt+D", "Rà soát / sửa câu dịch của trang này…": "Ctrl+Alt+R",
+    "PDF → Word (.docx)…": "Ctrl+Alt+W", "PDF → Excel (.xlsx)…": "Ctrl+Alt+E", "PDF → Ảnh (PNG/JPG)…": "Ctrl+Alt+I",
+    "PDF → Văn bản (.txt)…": "Ctrl+Alt+T", "Xuất mọi hình ảnh trong PDF ra thư mục…": "Ctrl+Alt+X",
     "PDF → HTML…": "Ctrl+Alt+H", "Tách file PDF…": "Ctrl+Shift+T", "Nhận dạng chữ (OCR) cho bản scan…": "Ctrl+Alt+O",
-    "Nén giảm dung lượng…": "Ctrl+Alt+C",
+    "Nén giảm dung lượng…": "Ctrl+Alt+N",
     # Ký & Bảo mật
-    "Ký số (chọn vị trí hiện chữ ký)…": "Ctrl+Shift+K", "Ký số không hiện khung chữ ký…": "Ctrl+Alt+K",
-    "Kiểm tra chữ ký số": "Ctrl+Shift+V", "Chèn ảnh chữ ký tay / con dấu…": "Ctrl+Shift+H",
-    "Đặt mật khẩu cho file…": "Ctrl+Shift+P", "Gỡ mật khẩu": "Ctrl+Shift+U",
-    "Mở thư mục chứng thư gốc tin cậy": "Ctrl+Alt+R",
+    "Ký số (chọn vị trí hiện chữ ký)…": "Ctrl+Shift+K", "Kiểm tra chữ ký số": "Ctrl+Shift+V",
+    "Chèn ảnh chữ ký tay / con dấu…": "Ctrl+Shift+H", "Đặt mật khẩu cho file…": "Ctrl+Shift+P",
     # Trợ giúp
     "Hướng dẫn sử dụng": "F1", "Danh sách phím tắt": "Ctrl+F1", "Giới thiệu": "Shift+F1",
 }
@@ -2148,7 +2153,7 @@ class MainWindow(QMainWindow):
         if from_mem and engine is not None:
             lines.insert(1, f"{from_mem} đoạn lấy lại từ bộ nhớ dịch, {n_new} đoạn mới gọi máy dịch.")
         lines.insert(2 if from_mem and engine is not None else 1,
-                     "Muốn sửa câu dịch cho chuẩn: Chuyển đổi → Rà soát / sửa câu dịch của trang này (Ctrl+Alt+G).")
+                     "Muốn sửa câu dịch cho chuẩn: Chuyển đổi → Rà soát / sửa câu dịch của trang này (Ctrl+Alt+R).")
         if job.get("img_units"):
             lines.append(f"Trong đó có {job['img_units']} dòng chữ nằm trong hình ảnh (đã nhận dạng rồi dịch đè lên hình). "
                          "Chữ quá mờ hoặc quá nhỏ thì được giữ nguyên.")
