@@ -1349,12 +1349,17 @@ class Viewer(QGraphicsView):
         size = dlg.size() if abs(dlg.size() - round(first["size"], 2)) > 0.01 else None      # không đổi: mỗi dòng giữ cỡ riêng
         col = qcolor_to_rgb(dlg.color())
         color = col if max(abs(col[k] - first["color"][k]) for k in range(3)) > 0.004 else None
-        with self.model.edit(i):
-            b0, i0 = bool(first["flags"] & 16), bool(first["flags"] & 2)        # không đổi ô Đậm/Nghiêng: mỗi dòng giữ kiểu riêng
-            used = tools.replace_text_runs(self.model.doc[i], runs, lines, size, color,
-                                           bold=dlg.bold() if dlg.bold() != b0 else None,
-                                           italic=dlg.italic() if dlg.italic() != i0 else None)
-            self.model.fonts_added = True
+        try:
+            with self.model.edit(i):
+                b0, i0 = bool(first["flags"] & 16), bool(first["flags"] & 2)    # không đổi ô Đậm/Nghiêng: mỗi dòng giữ kiểu riêng
+                used = tools.replace_text_runs(self.model.doc[i], runs, lines, size, color,
+                                               bold=dlg.bold() if dlg.bold() != b0 else None,
+                                               italic=dlg.italic() if dlg.italic() != i0 else None)
+                self.model.fonts_added = True
+        except tools.NoRoom as e:
+            QMessageBox.information(self, "Sửa chữ gốc", "Có dòng dài hơn bề rộng gốc nên cần xuống dòng, nhưng:\n\n" + str(e)
+                                    + "\n\nChưa có gì bị thay đổi.")
+            return
         self.hover_run = None
         self.message.emit(f"Đã sửa {len(runs)} dòng chữ trong vùng" + (f" (phông thay thế: {used})." if used else "."))
 
@@ -1372,14 +1377,20 @@ class Viewer(QGraphicsView):
         if not dlg.exec():
             return
         new = dlg.text().replace("\n", " ")
-        with self.model.edit(i):
-            page = self.model.doc[i]
-            used = tools.replace_text_run(page, run, new, dlg.size(), qcolor_to_rgb(dlg.color()),
-                                          bold=dlg.bold(), italic=dlg.italic())
-            self.model.fonts_added = True
+        n = 1
+        try:
+            with self.model.edit(i):
+                page = self.model.doc[i]
+                used, n = tools.replace_text_run_wrapped(page, run, new, dlg.size(), qcolor_to_rgb(dlg.color()),
+                                                         bold=dlg.bold(), italic=dlg.italic())
+                self.model.fonts_added = True
+        except tools.NoRoom as e:                # không xuống dòng được: trang đã được trả về như cũ
+            QMessageBox.information(self, "Sửa chữ gốc", "Chữ mới dài hơn bề rộng của dòng nên cần xuống dòng, nhưng:\n\n" + str(e))
+            return
         self.hover_run = None
         if used:
-            self.message.emit(f"Đã sửa chữ (phông thay thế: {used}).")
+            self.message.emit(f"Đã sửa chữ (phông thay thế: {used})."
+                              + (f" Chữ dài hơn bề rộng dòng nên đã xuống thành {n} dòng, phần bên dưới được đẩy xuống." if n > 1 else ""))
 
     def mouseDoubleClickEvent(self, e):
         if self.tool == "hand" and e.button() == Qt.LeftButton:
