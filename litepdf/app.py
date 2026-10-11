@@ -877,14 +877,17 @@ class MainWindow(QMainWindow):
         self._set("Chuyển trang xuống sau", cur < n - 1)
         self._set("Thêm bookmark con của mục đang chọn", t.bookmarks.tree.currentItem() is not None)
         self._set("Xoá tất cả bookmark", t.bookmarks.tree.topLevelItemCount() > 0)
-        has_annot = False
-        try:
-            for i in range(min(n, 400)):
-                if m.doc[i].first_annot is not None:
-                    has_annot = True
-                    break
-        except Exception:
-            has_annot = True
+        has_annot = getattr(m, "_has_annot", None)
+        if has_annot is None:        # dò một lần rồi nhớ; tài liệu thay đổi thì dò lại (xem add_tab)
+            has_annot = False
+            try:
+                for i in range(min(n, 400)):
+                    if m.doc[i].first_annot is not None:
+                        has_annot = True
+                        break
+            except Exception:
+                has_annot = True
+            m._has_annot = has_annot
         self._set("Làm phẳng ghi chú (gắn chết vào trang)", has_annot)
         self._dim_compare(t)
         self._set("Phóng to", v.zoom < 5.99)
@@ -929,6 +932,7 @@ class MainWindow(QMainWindow):
         self.search_box.setClearButtonEnabled(True)
         self.search_box.returnPressed.connect(lambda: self.do_search(True))
         self.search_box.textChanged.connect(lambda s: (not s) and self.do_search(True))
+        self.search_box.textChanged.connect(lambda *_: self._dim_unavailable())
         tb.addWidget(self.search_box)
         self.search_lb = QLabel("")
         self.search_lb.setMinimumWidth(70)
@@ -1013,6 +1017,9 @@ class MainWindow(QMainWindow):
             for x in self.tool_actions.values():
                 x.setChecked(False)
         self._update_color()
+        # Trạng thái mờ/sáng của từng mục luôn được tính lại ở đây (không chờ tới lúc mở menu), để menu hiện đúng ngay
+        # từ lần rê chuột đầu tiên và phím tắt của mục không dùng được cũng bị khoá.
+        self._dim_unavailable()
 
     def _update_color(self):
         t = self.tab()
@@ -1070,6 +1077,17 @@ class MainWindow(QMainWindow):
         v = t.own_viewer
         self.wire_viewer(t, v)
         model.stateChanged.connect(self._update_ui)
+        model.changed.connect(lambda *_: setattr(model, "_has_annot", None))
+        def refresh(*_):
+            try:
+                if self.tab() is t:
+                    self._dim_unavailable()
+            except RuntimeError:      # cửa sổ đang đóng: các thành phần giao diện đã bị huỷ
+                pass
+        t.bookmarks.tree.currentItemChanged.connect(refresh)
+        t.bookmarks.tree.model().rowsInserted.connect(refresh)
+        t.bookmarks.tree.model().rowsRemoved.connect(refresh)
+        t.bookmarks.tree.model().modelReset.connect(refresh)
         i = self.tabs.addTab(t, model.title)
         self.tabs.setCurrentIndex(i)
         self._update_ui()
@@ -1082,6 +1100,7 @@ class MainWindow(QMainWindow):
         v.zoomChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
         v.toolChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
         v.signRequested.connect(lambda pg, rect: self.guard(lambda: self.do_sign(t, pg, rect))())
+        v.selectionChanged.connect(lambda *_: self._dim_unavailable() if self.tab() is t and t.viewer is v else None)
 
     # ---------------------------------------------------------------- so sánh song song
     def doc_tabs(self) -> list[DocTab]:
