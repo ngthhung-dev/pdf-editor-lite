@@ -827,40 +827,115 @@ def text_dict(page) -> dict:
     return page.get_text("dict", flags=pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES)
 
 
+def text_runs(d: dict) -> list[dict]:
+    """Các "dòng chữ" sửa được của trang: những mẩu chữ cùng kiểu, cùng hàng, nằm sát nhau được nối thành một dòng.
+    (Nhiều file PDF ghi một dòng thành nhiều mẩu rời, có khi từng chữ cái; không nối thì chỉ sửa được từng mẩu.)
+    Kết quả được nhớ ngay trong d để rê chuột không phải tính lại."""
+    if "_runs" in d:
+        return d["_runs"]
+    pieces = []
+    for block in d.get("blocks", []):
+        for line in block.get("lines", []):
+            dr = tuple(line.get("dir", (1, 0)))
+            for s in line.get("spans", []):
+                if s["text"].strip():
+                    pieces.append((s, dr))
+    horiz = [(s, dr) for s, dr in pieces if abs(dr[1]) < 0.01 and dr[0] > 0]
+    other = [(s, dr) for s, dr in pieces if not (abs(dr[1]) < 0.01 and dr[0] > 0)]
+    horiz.sort(key=lambda x: (round(x[0]["origin"][1], 1), x[0]["bbox"][0]))
+    runs: list[dict] = []
+
+    def style_of(s):
+        # cùng một phông có thể bị file chia thành nhiều phông con (tên có tiền tố "ABCDEF+", hoặc nhiều phông Type3)
+        name = s["font"]
+        name = "Type3" if name.startswith("Type3") else name.split("+")[-1]
+        return (name, s["color"], s["flags"] & 18)
+
+    def start(s, dr):
+        runs.append({"bbox": pymupdf.Rect(s["bbox"]), "text": s["text"], "origin": pymupdf.Point(s["origin"]),
+                     "size": s["size"], "color": _rgb(s["color"]), "font": s["font"], "flags": s["flags"], "dir": dr,
+                     "_parts": {style_of(s): [len(s["text"]), s]}})
+    for s, dr in horiz:
+        r = runs[-1] if runs else None
+        # Nối theo DÒNG nhìn thấy trên trang: cùng hàng, cỡ chữ gần bằng nhau, đứng sát nhau. Chữ đậm / nghiêng / khác màu
+        # nằm giữa dòng vẫn thuộc dòng đó (kiểu chữ của dòng lấy theo phần chiếm nhiều chữ nhất).
+        if r is not None and abs(r["origin"].y - s["origin"][1]) < 0.25 * s["size"] \
+                and 0.88 <= s["size"] / max(0.1, r["size"]) <= 1.14:
+            gap = s["bbox"][0] - r["bbox"].x1
+            if -0.6 * s["size"] <= gap <= 1.2 * s["size"]:
+                glue = "" if r["text"].endswith(" ") or s["text"].startswith(" ") or gap < 0.18 * s["size"] else " "
+                r["text"] += glue + s["text"]
+                r["bbox"] |= pymupdf.Rect(s["bbox"])
+                part = r["_parts"].setdefault(style_of(s), [0, s])
+                part[0] += len(s["text"])
+                continue
+        start(s, dr)
+    for r in runs:
+        if len(r["_parts"]) > 1:
+            main = max(r["_parts"].values(), key=lambda x: x[0])[1]
+            r["font"], r["flags"], r["color"], r["size"] = main["font"], main["flags"], _rgb(main["color"]), main["size"]
+            r["mixed"] = True                # dòng có nhiều kiểu chữ: viết lại sẽ về một kiểu
+    for s, dr in other:              # chữ xoay / chữ dọc: giữ từng mẩu như cũ
+        start(s, dr)
+    for r in runs:
+        r["text"] = r["text"].rstrip()
+    d["_runs"] = runs
+    return runs
+
+
 def text_run_at(page, pt, tol: float = 2.0, d: dict | None = None) -> dict | None:
-    """Tìm đoạn chữ gốc tại điểm pt (toạ độ trang). Trả về mô tả đoạn chữ để sửa."""
+    """Tìm dòng chữ gốc tại điểm pt (toạ độ trang). Trả về mô tả dòng chữ để sửa."""
     pt = pymupdf.Point(pt)
     if d is None:
         d = text_dict(page)
-    for block in d.get("blocks", []):
-        for line in block.get("lines", []):
-            lb = pymupdf.Rect(line["bbox"]) + (-tol, -tol, tol, tol)
-            if pt not in lb:
+    best = None
+    for r in text_runs(d):
+        if pt in r["bbox"] + (-tol, -tol, tol, tol):
+            if best is None or r["bbox"].get_area() < best["bbox"].get_area():
+                best = r
+    return best
+
+
+def text_runs_in(page, rect, d: dict | None = None) -> list[dict]:
+    """Các dòng chữ nằm trong khung rect (phần lớn dòng nằm trong khung), xếp trên xuống rồi trái sang phải."""
+    rect = pymupdf.Rect(rect)
+    if d is None:
+        d = text_dict(page)
+    out = []
+    for r in text_runs(d):
+        b = r["bbox"]
+        if b.get_area() > 0 and (b & rect).get_area() >= 0.5 * b.get_area():
+            out.append(r)
+    out.sort(key=lambda r: (round(r["origin"].y / max(1.0, 0.5 * r["size"])), r["bbox"].x0))
+    return out
+
+
+def replace_text_runs(page, runs: list[dict], lines: list[str], size: float | None = None, color=None,
+                      bold=None, italic=None) -> str:
+    """Sửa cả vùng: dòng thứ k trong `lines` thay cho dòng chữ thứ k trong `runs` (giữ đúng vị trí, phông, cỡ của dòng đó).
+    Ít dòng hơn thì các dòng thừa bị xoá; nhiều dòng hơn thì viết tiếp xuống dưới dòng cuối."""
+    used = ""
+    for k, run in enumerate(runs):
+        new = lines[k] if k < len(lines) else ""
+        if new.strip() == run["text"].strip() and size is None and color is None and bold is None and italic is None:
+            continue                         # dòng không đổi gì: để nguyên chữ gốc (giữ đúng phông, chữ đậm trong dòng)
+        name = replace_text_run(page, run, new, size, color, bold=bold, italic=italic)
+        used = used or name
+    if runs and len(lines) > len(runs):
+        last = runs[-1]
+        ys = sorted({round(r["origin"].y, 1) for r in runs})
+        pitch = (ys[-1] - ys[0]) / (len(ys) - 1) if len(ys) > 1 else 1.25 * last["size"]
+        pitch = max(pitch, 1.05 * (size or last["size"]))
+        for n, text in enumerate(lines[len(runs):], 1):
+            if not text.strip():
                 continue
-            spans = [s for s in line["spans"] if s["text"].strip()]
-            if not spans:
-                continue
-            hit = None
-            for s in spans:
-                if pt in pymupdf.Rect(s["bbox"]) + (-tol, -tol, tol, tol):
-                    hit = s
-                    break
-            if hit is None:
-                continue
-            style = {(s["font"], round(s["size"], 1), s["color"], s["flags"] & 18) for s in spans}
-            if len(style) == 1:  # cả dòng cùng kiểu chữ -> sửa cả dòng
-                all_spans = line["spans"]
-                bbox = pymupdf.Rect(line["bbox"])
-                text = "".join(s["text"] for s in all_spans)
-                first = all_spans[0]
-            else:
-                bbox = pymupdf.Rect(hit["bbox"])
-                text = hit["text"]
-                first = hit
-            return {"bbox": bbox, "text": text, "origin": pymupdf.Point(first["origin"]),
-                    "size": first["size"], "color": _rgb(first["color"]), "font": first["font"],
-                    "flags": first["flags"], "dir": tuple(line.get("dir", (1, 0)))}
-    return None
+            font = pick_font(last["font"], last["flags"], text, bold=bold, italic=italic)
+            tw = pymupdf.TextWriter(page.rect, color=color if color is not None else last["color"])
+            tw.append(pymupdf.Point(last["origin"].x, last["origin"].y + n * pitch), text, font=font,
+                      fontsize=size or last["size"])
+            tw.write_text(page, overlay=True)
+            used = used or font.name
+    return used
 
 
 def write_display_text(page, disp_pt, text: str, font, size: float, color) -> None:

@@ -738,7 +738,7 @@ class Viewer(QGraphicsView):
             elif self.tool in ("line", "arrow"):
                 p.setPen(QPen(col, self.line_width))
                 p.drawLine(a, b)
-            elif self.tool in ("image", "sign", "erase"):
+            elif self.tool in ("image", "sign", "erase") or (self.tool == "edittext" and not self.drag_run):
                 c = {"erase": QColor("#d93025"), "sign": QColor("#188038")}.get(self.tool, QColor("#1a73e8"))
                 p.setPen(QPen(c, 1.3 * px, Qt.DashLine))
                 p.setBrush(QColor(c.red(), c.green(), c.blue(), 30))
@@ -777,7 +777,7 @@ class Viewer(QGraphicsView):
             "highlight": "Kéo chuột qua chữ để tô sáng. Esc để thôi.",
             "underline": "Kéo chuột qua chữ để gạch chân. Esc để thôi.",
             "strike": "Kéo chuột qua chữ để gạch ngang. Esc để thôi.",
-            "edittext": "Bấm vào dòng chữ để sửa nội dung, hoặc giữ chuột kéo để dời dòng chữ sang chỗ khác.",
+            "edittext": "Bấm vào một dòng chữ để sửa; kéo khung quanh nhiều dòng để sửa cả vùng; giữ Ctrl và kéo để dời dòng chữ.",
             "text": "Bấm vào chỗ muốn thêm chữ.",
             "note": "Bấm vào chỗ muốn đặt ghi chú.",
             "image": "Kéo một khung tại chỗ muốn đặt ảnh (hoặc bấm một lần để đặt cỡ mặc định).",
@@ -1097,7 +1097,9 @@ class Viewer(QGraphicsView):
         if self.tool == "ink":
             self.ink = [sp]
         elif self.tool == "edittext":
-            self.drag_run = tools.text_run_at(self.model.doc[i], self.to_page(i, sp))
+            # giữ Ctrl và kéo = dời dòng chữ; kéo thường = quét khung quanh nhiều dòng để sửa cả vùng
+            self.drag_run = tools.text_run_at(self.model.doc[i], self.to_page(i, sp)) \
+                if e.modifiers() & Qt.ControlModifier else None
         elif self.tool == "select" or self.tool in MARK_TOOLS:
             self.sel_rects, self.sel_text = [], ""
             self.sel_image = None
@@ -1310,9 +1312,51 @@ class Viewer(QGraphicsView):
                     used = tools.replace_text_run(self.model.doc[i], run, run["text"], origin=new_origin)
                     self.model.fonts_added = True
                 self.message.emit(f"Đã dời dòng chữ (phông thay thế: {used}).")
+            elif not small:
+                self._edit_text_region(i, rect)
             else:
                 self._edit_text_at(i, a)
             self.drag_run = None
+
+    def _edit_text_region(self, i: int, rect):
+        """Quét một khung: sửa mọi dòng chữ gốc trong khung cùng lúc (mỗi dòng trong hộp nhập ứng với một dòng chữ)."""
+        from .dialogs import TextDialog
+        runs = tools.text_runs_in(self.model.doc[i], rect)
+        if not runs:
+            self.message.emit("Không có chữ gốc trong khung vừa quét (nếu là bản scan thì dùng Xoá vùng + Thêm chữ).")
+            return
+        if len(runs) == 1:
+            return self._edit_text_at(i, (runs[0]["bbox"].tl + runs[0]["bbox"].br) / 2)
+        if len(runs) > 400:
+            self.message.emit("Khung vừa quét có quá nhiều dòng chữ. Hãy quét vùng nhỏ hơn.")
+            return
+        first = runs[0]
+        same = len({(round(r["size"], 1), r["color"]) for r in runs}) == 1
+        note = (f"{len(runs)} dòng chữ trong vùng đã quét, xếp từ trên xuống, trái sang phải (mỗi ô của bảng là một dòng). "
+                "Mỗi dòng ở đây thay cho đúng một dòng trên trang: giữ nguyên số dòng để chữ nằm đúng chỗ cũ; "
+                "xoá trống một dòng là xoá dòng đó. Dòng nào không sửa thì giữ nguyên chữ gốc; dòng được sửa mà có chữ đậm / "
+                "nghiêng xen giữa sẽ về một kiểu chữ."
+                + ("" if same else " Các dòng đang có cỡ / màu khác nhau: không đổi ô Cỡ chữ, Màu thì mỗi dòng giữ kiểu riêng."))
+        dlg = TextDialog(self, "Sửa chữ gốc trong vùng đã quét", "\n".join(r["text"] for r in runs), round(first["size"], 2),
+                         QColor.fromRgbF(*first["color"]), style=(bool(first["flags"] & 16), bool(first["flags"] & 2)),
+                         note=note)
+        dlg.resize(max(dlg.width(), 620), min(720, max(dlg.height(), 220 + 19 * len(runs))))
+        if not dlg.exec():
+            return
+        lines = dlg.text().split("\n")
+        while lines and not lines[-1].strip() and len(lines) > len(runs):
+            lines.pop()
+        size = dlg.size() if abs(dlg.size() - round(first["size"], 2)) > 0.01 else None      # không đổi: mỗi dòng giữ cỡ riêng
+        col = qcolor_to_rgb(dlg.color())
+        color = col if max(abs(col[k] - first["color"][k]) for k in range(3)) > 0.004 else None
+        with self.model.edit(i):
+            b0, i0 = bool(first["flags"] & 16), bool(first["flags"] & 2)        # không đổi ô Đậm/Nghiêng: mỗi dòng giữ kiểu riêng
+            used = tools.replace_text_runs(self.model.doc[i], runs, lines, size, color,
+                                           bold=dlg.bold() if dlg.bold() != b0 else None,
+                                           italic=dlg.italic() if dlg.italic() != i0 else None)
+            self.model.fonts_added = True
+        self.hover_run = None
+        self.message.emit(f"Đã sửa {len(runs)} dòng chữ trong vùng" + (f" (phông thay thế: {used})." if used else "."))
 
     def _edit_text_at(self, i: int, pt):
         from .dialogs import TextDialog
@@ -1322,7 +1366,9 @@ class Viewer(QGraphicsView):
             return
         dlg = TextDialog(self, "Sửa chữ gốc", run["text"], round(run["size"], 2), QColor.fromRgbF(*run["color"]),
                          single_line=True, style=(bool(run["flags"] & 16), bool(run["flags"] & 2)),
-                         note=f"Phông gốc: {run['font'].split('+')[-1]}. Để trống rồi OK nếu muốn xoá dòng này.")
+                         note=f"Phông gốc: {run['font'].split('+')[-1]}. Để trống rồi OK nếu muốn xoá dòng này."
+                              + (" Dòng này có nhiều kiểu chữ (đậm / nghiêng / màu khác): sau khi sửa cả dòng sẽ về một kiểu."
+                                 if run.get("mixed") else ""))
         if not dlg.exec():
             return
         new = dlg.text().replace("\n", " ")
