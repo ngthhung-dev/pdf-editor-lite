@@ -3,6 +3,7 @@ name: Build installers (Windows, macOS, Linux)
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'packaging/**.txt']
   workflow_dispatch:
     inputs:
       libreoffice:

@@ -1,0 +1,40 @@
+CACH BUILD BO CAI - PDF Editor Lite 1.0.0
+==========================================
+
+CACH 1 - BUILD TU DONG TREN GITHUB (khuyen dung, khong can cai gi tren may)
+  Moi lan day ma len nhanh main, workflow .github/workflows/build-windows.yml tu chay 4 viec song song:
+    - Windows 64-bit  -> PDF-Editor-Lite-1.0.0-build<N>-Setup.exe
+    - macOS chip Apple -> PDF-Editor-Lite-1.0.0-build<N>-macOS-AppleSilicon.pkg
+    - macOS chip Intel -> PDF-Editor-Lite-1.0.0-build<N>-macOS-Intel.pkg
+    - Linux 64-bit     -> pdf-editor-lite_1.0.0-build<N>_amd64.deb
+  Moi bo cai duoc cai thu va chay tu kiem tra (--selftest); xong thi tat ca duoc dang vao muc Releases,
+  tag v1.0.0-build<N>. Nhat ky build va ket qua tu kiem tra nam o nhanh build-logs.
+  Chay tay: tab Actions > "Build installers (Windows, macOS, Linux)" > Run workflow
+  (tuy chon cho Windows: kem LibreOffice, kem Ollama, kem san model dich).
+
+CACH 2 - BUILD TREN MAY WINDOWS
+  Can: Python 3.10-3.13 64-bit (tick "Add python.exe to PATH"), Inno Setup 6 (https://jrsoftware.org/isdl.php),
+       mang Internet, o dia trong ~6 GB (~12 GB neu kem model dich).
+  Chay: packaging\windows\BUILD_WINDOWS.bat      -> build_win\output\
+  Tuy chon: -NoLibreOffice | -NoOllama | -NoModel | -Model qwen3:4b
+
+CACH 3 - BUILD TREN MAY MAC
+  Can: Python 3.10+ (python.org hoac Homebrew), Xcode Command Line Tools (xcode-select --install), mang Internet.
+  Chay: bash packaging/macos/build_macos.sh       -> build_mac/output/
+  Kien truc theo may build (Apple Silicon hoac Intel). Tuy chon: NO_LIBREOFFICE=1, MODEL=<ten model>.
+  Bo cai chi ky ad-hoc (chua co chu ky Apple Developer, chua notarize).
+
+CACH 4 - BUILD TREN LINUX
+  Can: Python 3.10+, python3-venv, dpkg-deb, curl. Nen build tren Ubuntu 22.04 de chay duoc ca Mint 21 va 22.
+  Chay: bash packaging/linux/build_linux.sh       -> build_linux/output/
+
+THANH PHAN TRONG BO CAI
+                          Windows                 macOS                      Linux (.deb)
+  App + thu vien + HDSD   bat buoc                bat buoc                   bat buoc
+  OCR Tesseract (vie,eng) tich chon               kem san                    kem san
+  OCR RapidOCR + model    tich chon               kem san                    kem san
+  LibreOffice             kem san, tich chon      kem san, tich chon         lay tu kho phan mem (Depends)
+  Ollama + model dich     tai khi cai, tich chon  tai khi cai, tich chon     muc "Cai AI dich tren may"
+  Du lieu nguoi dung khong bao gio bi bo cai / trinh go cai dat dong toi.
+
+KHONG KEM DUOC: driver USB token, chung thu goc tin cay, API key Gemini.
