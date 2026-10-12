@@ -77,36 +77,28 @@ def send_to_running(files: list[str]) -> bool:
 
 
 def _splash(files: list[str]):
-    """Khung chờ nhỏ hiện ngay khi bấm mở, trong lúc nạp phần còn lại của app."""
-    from PySide6.QtCore import QRectF, Qt
-    from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
-    from PySide6.QtWidgets import QSplashScreen
-    from .icons import paint_app_icon
-    w, h = 380, 120
-    pm = QPixmap(w, h)
-    pm.fill(QColor("#ffffff"))
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    p.setPen(QColor("#dadce0"))
-    p.drawRect(0, 0, w - 1, h - 1)
-    p.drawPixmap(22, 28, paint_app_icon(64))
-    f = QFont()
-    f.setPointSize(13)
-    f.setBold(True)
-    p.setFont(f)
-    p.setPen(QColor("#202124"))
-    p.drawText(QRectF(104, 30, w - 120, 28), Qt.AlignLeft | Qt.AlignVCenter, "PDF Editor Lite")
-    f.setPointSize(9)
-    f.setBold(False)
-    p.setFont(f)
-    p.setPen(QColor("#5f6368"))
-    name = os.path.basename(files[0]) if files else ""
-    text = ("Đang mở " + name) if name else "Đang khởi động…"
-    text = p.fontMetrics().elidedText(text, Qt.ElideMiddle, w - 124)
-    p.drawText(QRectF(104, 60, w - 120, 24), Qt.AlignLeft | Qt.AlignVCenter, text)
-    p.end()
-    s = QSplashScreen(pm, Qt.WindowStaysOnTopHint)
+    """Khung chờ nhỏ hiện ngay khi bấm mở, trong lúc nạp phần còn lại của app. Dùng ảnh vẽ sẵn: vẽ chữ lúc này
+    buộc Qt dò hết phông trong máy (trên Windows mất hơn 1 giây), làm khung chờ hiện chậm đúng bằng chừng đó."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication, QPixmap
+    from PySide6.QtWidgets import QLabel
+    roots = [getattr(sys, "_MEIPASS", ""), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+    pm = QPixmap()
+    for r in roots:
+        if r and pm.load(os.path.join(r, "assets", "splash.png")):
+            break
+    if pm.isNull():
+        return None
+    # Cửa sổ nhãn trơn thay cho QSplashScreen: QSplashScreen.show() có thể đứng chờ tới 1 giây cho cửa sổ "hiện ra".
+    s = QLabel()
+    s.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+    s.setPixmap(pm)
+    s.resize(pm.size())
+    scr = QGuiApplication.primaryScreen()
+    if scr is not None:
+        s.move(scr.availableGeometry().center() - s.rect().center())
     s.show()
+    s.finish = lambda _w: s.close()
     return s
 
 
