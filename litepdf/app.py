@@ -1137,7 +1137,7 @@ class MainWindow(QMainWindow):
         tb.setIconSize(QSize(22, 22))
         self.addToolBar(tb)
         for a in (self.a_open, self.a_save, self.a_print, None, self.a_undo, self.a_redo, None, self.a_side,
-                  self.a_cmp, self.a_sync, self.a_diff, self.a_dnext,
+                  self.a_cmp, self.a_sync, self.a_diff, self.a_dprev, self.a_dnext,
                   self.a_zout):
             tb.addSeparator() if a is None else tb.addAction(a)
         self.zoom_box = QComboBox()
