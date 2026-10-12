@@ -1,4 +1,4 @@
-<#
+﻿<#
   Build bo cai Windows cho PDF Editor Lite.
   Chay:  powershell -ExecutionPolicy Bypass -File packaging\windows\build_windows.ps1
   Tuy chon:
@@ -94,6 +94,16 @@ if (-not (Test-Path $st)) { throw "Ban dong goi khong chay duoc (khong tao ra se
 Get-Content $st -Encoding UTF8 | Write-Host
 Add-Content -Path $log -Value (Get-Content $st -Raw -Encoding UTF8) -Encoding UTF8
 if ((Get-Content $st -Raw -Encoding UTF8) -match '"(pymupdf|pyhanko|fonts)": "LOI') { throw "Ban dong goi thieu thanh phan bat buoc (xem tren)." }
+# Do thoi gian khoi dong (mo app kem mot file PDF, den luc trang dau ve xong): lan 1 gan nhu "lanh", lan 2 "am"
+$pdf = Join-Path $root "assets\Huong dan su dung PDF Editor Lite.pdf"
+foreach ($k in 1, 2) {
+    $pj = Join-Path $work "startup$k.json"
+    $env:LITEPDF_STARTUP_PROBE = $pj
+    $sp = Start-Process -FilePath "$dist\PDFEditorLite.exe" -ArgumentList "`"$pdf`"" -PassThru
+    if (-not $sp.WaitForExit(120000)) { $sp.Kill() }
+    Remove-Item Env:\LITEPDF_STARTUP_PROBE
+    if (Test-Path $pj) { Note ("khoi dong lan ${k} (giay tu luc tao tien trinh): " + (Get-Content $pj -Raw)) } else { Note "khoi dong lan ${k}: khong do duoc" }
+}
 Remove-Item -Recurse -Force "$dist\resources\tessdata"      # tessdata la thanh phan tuy chon, do bo cai chep vao
 
 # ---------------------------------------------------------------- 6. Tach thanh phan tuy chon RapidOCR

@@ -1,0 +1,148 @@
+"""Khởi động nhanh: chỉ nạp Qt, hiện khung chờ ngay, chuyển file cho cửa sổ đang mở (nếu có),
+rồi mới nạp phần nặng (PyMuPDF, các hộp thoại...) và dựng cửa sổ chính."""
+from __future__ import annotations
+
+import os
+import sys
+import time
+
+T0 = time.perf_counter()
+
+
+def _process_age() -> float:
+    """Số giây từ lúc hệ điều hành tạo tiến trình (gồm cả phần nạp thư viện trước khi Python chạy)."""
+    try:
+        if sys.platform.startswith("win"):
+            import ctypes
+            from ctypes import wintypes
+            ft = [wintypes.FILETIME() for _ in range(4)]
+            now = wintypes.FILETIME()
+            k = ctypes.windll.kernel32
+            k.GetProcessTimes(k.GetCurrentProcess(), *[ctypes.byref(f) for f in ft])
+            k.GetSystemTimeAsFileTime(ctypes.byref(now))
+            v = lambda f: (f.dwHighDateTime << 32) | f.dwLowDateTime
+            return (v(now) - v(ft[0])) / 1e7
+        if sys.platform.startswith("linux"):
+            with open("/proc/self/stat") as f:
+                start = int(f.read().rsplit(")", 1)[1].split()[19])
+            with open("/proc/uptime") as f:
+                up = float(f.read().split()[0])
+            return up - start / os.sysconf("SC_CLK_TCK")
+    except Exception:
+        pass
+    return time.perf_counter() - T0
+
+
+MARKS: dict[str, float] = {}
+
+
+def mark(name: str) -> None:
+    MARKS[name] = round(_process_age(), 3)
+
+
+def _instance_name() -> str:
+    """Tên kênh nội bộ để các lần mở app của CÙNG một người dùng tìm thấy nhau."""
+    import getpass
+    import hashlib
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = "user"
+    return "PDFEditorLite-" + hashlib.md5(user.encode("utf-8", "ignore")).hexdigest()[:10]
+
+
+def send_to_running(files: list[str]) -> bool:
+    """App đang mở sẵn thì chuyển các file cho cửa sổ đó mở thành tab mới. Trả về True nếu đã chuyển xong."""
+    import json
+    from PySide6.QtNetwork import QLocalSocket
+    sock = QLocalSocket()
+    sock.connectToServer(_instance_name())
+    if not sock.waitForConnected(400):
+        return False
+    if sys.platform.startswith("win"):      # cho phép cửa sổ đang mở tự nổi lên trước (Windows mặc định chặn việc này)
+        try:
+            import ctypes
+            ctypes.windll.user32.AllowSetForegroundWindow(-1)
+        except Exception:
+            pass
+    sock.write(json.dumps({"files": files}).encode("utf-8"))
+    sock.flush()
+    sock.waitForBytesWritten(2000)
+    # Đã nối được tức là có cửa sổ đang mở và nó sẽ nhận file. Chờ nó đóng kết nối (đã nhận xong) rồi thoát.
+    if sock.state() != QLocalSocket.UnconnectedState:
+        sock.waitForDisconnected(3000)
+    return True
+
+
+def _splash(files: list[str]):
+    """Khung chờ nhỏ hiện ngay khi bấm mở, trong lúc nạp phần còn lại của app."""
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
+    from PySide6.QtWidgets import QSplashScreen
+    from .icons import paint_app_icon
+    w, h = 380, 120
+    pm = QPixmap(w, h)
+    pm.fill(QColor("#ffffff"))
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(QColor("#dadce0"))
+    p.drawRect(0, 0, w - 1, h - 1)
+    p.drawPixmap(22, 28, paint_app_icon(64))
+    f = QFont()
+    f.setPointSize(13)
+    f.setBold(True)
+    p.setFont(f)
+    p.setPen(QColor("#202124"))
+    p.drawText(QRectF(104, 30, w - 120, 28), Qt.AlignLeft | Qt.AlignVCenter, "PDF Editor Lite")
+    f.setPointSize(9)
+    f.setBold(False)
+    p.setFont(f)
+    p.setPen(QColor("#5f6368"))
+    name = os.path.basename(files[0]) if files else ""
+    text = ("Đang mở " + name) if name else "Đang khởi động…"
+    text = p.fontMetrics().elidedText(text, Qt.ElideMiddle, w - 124)
+    p.drawText(QRectF(104, 60, w - 120, 24), Qt.AlignLeft | Qt.AlignVCenter, text)
+    p.end()
+    s = QSplashScreen(pm, Qt.WindowStaysOnTopHint)
+    s.show()
+    return s
+
+
+def main(argv: list[str]) -> int:
+    mark("python")
+    if len(argv) > 1 and argv[1] == "--selftest":
+        from .app import selftest
+        return selftest(argv[2] if len(argv) > 2 else None)
+    from PySide6.QtWidgets import QApplication
+    app = QApplication(argv)
+    mark("qt")
+    files = [os.path.abspath(a) for a in argv[1:] if not a.startswith("-") and os.path.exists(a)]
+    lock = None
+    try:        # đã có một cửa sổ PDF Editor Lite đang mở: giao file cho nó rồi thoát, không mở cửa sổ thứ hai
+        from PySide6.QtCore import QDir, QLockFile
+        if send_to_running(files):
+            return 0
+        # Chưa có cửa sổ nào nhận. Có thể nhiều file vừa được mở cùng lúc (chọn nhiều file rồi Enter): chỉ MỘT tiến trình
+        # giữ được khoá và trở thành cửa sổ chính, các tiến trình còn lại chờ nó khởi động xong rồi giao file cho nó.
+        lock = QLockFile(os.path.join(QDir.tempPath(), _instance_name() + ".lock"))
+        lock.setStaleLockTime(0)
+        if not lock.tryLock(0):
+            end = time.time() + 25
+            while time.time() < end:
+                if send_to_running(files):
+                    return 0
+                if lock.tryLock(0):          # cửa sổ chính đã thoát giữa chừng: tiến trình này lên thay
+                    break
+                time.sleep(0.25)
+    except Exception:
+        pass
+    splash = None
+    try:
+        splash = _splash(files)
+        app.processEvents()
+    except Exception:
+        pass
+    mark("splash")
+    from .app import start
+    mark("import")
+    return start(app, files, lock, splash)

@@ -2647,13 +2647,14 @@ def selftest(out: str | None = None) -> int:
         old, V.INCR_MIN = V.INCR_MIN, 0
         try:
             m = V.DocModel(d.tobytes(), None)
-            mode = bool(m._work)
             count = lambda: [len(list(pg.annots())) for pg in m.doc]
             seen = [count()]
             for k in range(3):
                 with m.edit(k):
                     m.doc[k].add_rect_annot((50, 50, 150, 120))
                 seen.append(count())
+                if k == 0:
+                    mode = bool(m._work)
             with m.edit(structure=True):
                 m.doc.delete_page(0)
             seen.append(count())
@@ -2681,38 +2682,7 @@ def selftest(out: str | None = None) -> int:
     return 0
 
 
-def _instance_name() -> str:
-    """Tên kênh nội bộ để các lần mở app của CÙNG một người dùng tìm thấy nhau."""
-    import getpass
-    import hashlib
-    try:
-        user = getpass.getuser()
-    except Exception:
-        user = "user"
-    return "PDFEditorLite-" + hashlib.md5(user.encode("utf-8", "ignore")).hexdigest()[:10]
-
-
-def send_to_running(files: list[str]) -> bool:
-    """App đang mở sẵn thì chuyển các file cho cửa sổ đó mở thành tab mới. Trả về True nếu đã chuyển xong."""
-    import json
-    from PySide6.QtNetwork import QLocalSocket
-    sock = QLocalSocket()
-    sock.connectToServer(_instance_name())
-    if not sock.waitForConnected(400):
-        return False
-    if sys.platform.startswith("win"):      # cho phép cửa sổ đang mở tự nổi lên trước (Windows mặc định chặn việc này)
-        try:
-            import ctypes
-            ctypes.windll.user32.AllowSetForegroundWindow(-1)
-        except Exception:
-            pass
-    sock.write(json.dumps({"files": files}).encode("utf-8"))
-    sock.flush()
-    sock.waitForBytesWritten(2000)
-    # Đã nối được tức là có cửa sổ đang mở và nó sẽ nhận file. Chờ nó đóng kết nối (đã nhận xong) rồi thoát.
-    if sock.state() != QLocalSocket.UnconnectedState:
-        sock.waitForDisconnected(3000)
-    return True
+from .launch import _instance_name, send_to_running  # noqa: E402  (dùng chung với phần khởi động nhanh)
 
 
 def listen_for_files(win) -> None:
@@ -2751,32 +2721,15 @@ def listen_for_files(win) -> None:
 
 
 def run(argv: list[str]) -> int:
-    if len(argv) > 1 and argv[1] == "--selftest":
-        return selftest(argv[2] if len(argv) > 2 else None)
-    app = QApplication(argv)
+    from .launch import main
+    return main(argv)
+
+
+def start(app, files: list[str], lock, splash=None) -> int:
+    """Phần còn lại của việc khởi động, sau khi khung chờ đã hiện (xem launch.py)."""
+    from . import launch
     from . import vi_qt
     vi_qt.install(app)            # nút và hộp thoại chuẩn của Qt hiện bằng tiếng Việt
-    files = [os.path.abspath(a) for a in argv[1:] if not a.startswith("-") and os.path.exists(a)]
-    lock = None
-    try:        # đã có một cửa sổ PDF Editor Lite đang mở: giao file cho nó rồi thoát, không mở cửa sổ thứ hai
-        import time
-        from PySide6.QtCore import QDir, QLockFile
-        if send_to_running(files):
-            return 0
-        # Chưa có cửa sổ nào nhận. Có thể nhiều file vừa được mở cùng lúc (chọn nhiều file rồi Enter): chỉ MỘT tiến trình
-        # giữ được khoá và trở thành cửa sổ chính, các tiến trình còn lại chờ nó khởi động xong rồi giao file cho nó.
-        lock = QLockFile(os.path.join(QDir.tempPath(), _instance_name() + ".lock"))
-        lock.setStaleLockTime(0)
-        if not lock.tryLock(0):
-            end = time.time() + 25
-            while time.time() < end:
-                if send_to_running(files):
-                    return 0
-                if lock.tryLock(0):          # cửa sổ chính đã thoát giữa chừng: tiến trình này lên thay
-                    break
-                time.sleep(0.25)
-    except Exception:
-        pass
     app._instance_lock = lock
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(VERSION)
@@ -2815,6 +2768,9 @@ def run(argv: list[str]) -> int:
     win = MainWindow()
     win.place_centered()
     win.show()
+    if splash is not None:
+        splash.finish(win)
+    launch.mark("window")
     try:
         listen_for_files(win)
     except Exception:
@@ -2832,6 +2788,19 @@ def run(argv: list[str]) -> int:
                 return False
         app._file_open = _FileOpen(app)
         app.installEventFilter(app._file_open)
-    for a in files:
-        win.open_path(a)
+    probe = os.environ.get("LITEPDF_STARTUP_PROBE")
+
+    def open_files():          # mở file sau khi cửa sổ đã vẽ xong: người dùng thấy app lên ngay
+        for a in files:
+            win.open_path(a)
+        launch.mark("file")
+        if probe:
+            def report():
+                launch.mark("painted")
+                import json
+                with open(probe, "w", encoding="utf-8") as f:
+                    json.dump(launch.MARKS, f)
+                app.quit()
+            QTimer.singleShot(300, win, report)
+    QTimer.singleShot(0, win, open_files)
     return app.exec()

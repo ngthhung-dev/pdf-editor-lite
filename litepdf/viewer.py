@@ -92,8 +92,9 @@ class DocModel(QObject):
         self.redo_stack: list = []
         self._work: list | None = None          # [file tạm, độ dài hiện tại] khi đang dùng cách "nối đuôi"
         self._files: list[str] = []
-        if not self.encrypted:                  # file có mật khẩu: không ghi bản đã giải mã ra đĩa
-            self._start_work(data)
+        # File lớn: bản làm việc trên đĩa chỉ được tạo ở lần sửa đầu tiên, để mở file (chỉ xem) không phải chép cả file
+        # ra thư mục tạm và mở lại lần nữa. File có mật khẩu: không bao giờ ghi bản đã giải mã ra đĩa.
+        self._lazy = not self.encrypted and len(data) >= INCR_MIN
 
     # -- truy cập
     @property
@@ -183,7 +184,18 @@ class DocModel(QObject):
         """Điểm hoàn tác của trạng thái hiện tại."""
         if self._work:
             return ("w", self._work[0], self._work[1])
+        if self._lazy and self.base_data is not None:      # chưa sửa gì: đúng bằng nội dung lúc mở, khỏi chụp lại
+            return self.base_data
         return self.doc.tobytes()
+
+    def _begin_work_after_edit(self) -> None:
+        """Lần sửa đầu tiên của file lớn: từ đây chuyển sang bản làm việc trên đĩa (hoàn tác kiểu nối đuôi)."""
+        if self._lazy:
+            self._lazy = False
+            try:
+                self._start_work(self.doc.tobytes())
+            except Exception:
+                pass
 
     @staticmethod
     def _weight(e) -> int:
@@ -241,7 +253,9 @@ class DocModel(QObject):
                 tools.style_notes(self.doc[page])      # ghi chú vừa tạo/sửa: dùng biểu tượng bong bóng thay cho ô vuông mặc định
             except Exception:
                 pass
-        if self._work and not self._commit():
+        if self._lazy:
+            self._begin_work_after_edit()
+        elif self._work and not self._commit():
             # không ghi nối đuôi được: từ đây quay về cách chụp cả tài liệu, điểm hoàn tác lấy từ phần file chưa đụng tới
             snap = self._prefix(snap[1], snap[2])
             self._work = None
@@ -259,8 +273,10 @@ class DocModel(QObject):
         except Exception:
             pass
         self._work = None
+        self._lazy = False
         self.doc = pymupdf.open(stream=data, filetype="pdf")
-        self._start_work(data)
+        if not self.encrypted:
+            self._start_work(data)
         self._push(self.undo_stack, snap)
         self.redo_stack.clear()
         self.dirty = True
