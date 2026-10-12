@@ -2579,6 +2579,24 @@ class MainWindow(QMainWindow):
         from PySide6.QtGui import QDesktopServices
         QDesktopServices.openUrl(QUrl.fromLocalFile(trust_dir()))
 
+    def _startup_report(self) -> str:
+        """Bảng thời gian khởi động lần này, từng bước (để tìm chỗ chậm trên máy người dùng)."""
+        from . import launch
+        m = launch.MARKS
+        steps = [("python", "Nạp chương trình (Windows nạp file, quét virus…)"), ("qt", "Nạp giao diện Qt"),
+                 ("splash", "Hiện khung chờ"), ("import", "Nạp thư viện PDF và các chức năng"), ("style", "Cài giao diện"),
+                 ("fonts", f"Dò phông chữ trên máy ({m.get('so_phong', '?')} họ phông)"), ("mainwindow", "Dựng cửa sổ chính"),
+                 ("window", "Hiện cửa sổ"), ("file", "Đọc file PDF"), ("painted", "Vẽ trang đầu")]
+        rows, prev = [], 0.0
+        for k, label in steps:
+            if k in m:
+                rows.append(f"<tr><td>{label}</td><td align='right'>{m[k] - prev:.2f} giây</td></tr>")
+                prev = m[k]
+        if not rows:
+            return ""
+        return ("<h3 style='color:#1a56c4;margin:12px 0 2px 0'>Thời gian khởi động lần này: "
+                f"{prev:.1f} giây</h3><table>" + "".join(rows) + "</table>")
+
     def about(self):
         d = ReportDialog(self, "Giới thiệu",
                          "<style>p,td{font-size:13px;line-height:150%} td{padding:3px 12px 3px 0;vertical-align:top}</style>"
@@ -2586,7 +2604,7 @@ class MainWindow(QMainWindow):
                          f"<p><b>{APP_NAME} by {AUTHOR}</b><br>Phiên bản {VERSION_TEXT} · lõi PDF: PyMuPDF {pymupdf.VersionBind}</p>"
                          "<p>Trình xem và chỉnh sửa PDF gọn nhẹ. Cách dùng: Trợ giúp → Hướng dẫn sử dụng (F1).</p>"
                          "<h3 style='color:#1a56c4;margin:12px 0 2px 0'>Tình trạng các thành phần trên máy này</h3>"
-                         + self.component_status() +
+                         + self.component_status() + self._startup_report() +
                          "<p style='color:#5f6368'>Mã nguồn dùng PyMuPDF (giấy phép AGPL) và pyHanko (MIT): dùng nội bộ "
                          "thoải mái, nếu phát hành cho người khác cần kèm mã nguồn.</p>")
         from .dialogs import fit_dialog, center_on_parent
@@ -2761,11 +2779,19 @@ def start(app, files: list[str], lock, splash=None) -> int:
     pal.setColor(QPalette.Disabled, QPalette.Highlight, QColor("#e8eaed"))
     pal.setColor(QPalette.Disabled, QPalette.HighlightedText, QColor("#b4b9c0"))
     app.setPalette(pal)
+    launch.mark("style")
+    try:        # dò danh sách phông của máy (Qt làm việc này một lần, máy cài nhiều phông thì lâu): đo riêng để biết
+        from PySide6.QtGui import QFontDatabase
+        launch.MARKS["so_phong"] = len(QFontDatabase.families())
+    except Exception:
+        pass
+    launch.mark("fonts")
     app.setStyleSheet("QToolBar{border:0;border-bottom:1px solid #dadce0;spacing:2px;padding:3px;background:#f6f7f9;}"
                       "QToolButton{padding:3px;border-radius:4px;} QToolButton:hover{background:#e3e6ea;}"
                       "QToolButton:checked{background:#d2e3fc;} QStatusBar{color:#3c4043;}"
                       "QMenu::item:disabled{color:#b4b9c0;} QToolButton:disabled{color:#b4b9c0;}")
     win = MainWindow()
+    launch.mark("mainwindow")
     win.place_centered()
     win.show()
     if splash is not None:
@@ -2794,6 +2820,11 @@ def start(app, files: list[str], lock, splash=None) -> int:
         for a in files:
             win.open_path(a)
         launch.mark("file")
+
+        def painted():
+            launch.mark("painted")
+            launch.save_marks()
+        QTimer.singleShot(0, win, painted)
         if probe:
             def report():
                 launch.mark("painted")

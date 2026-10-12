@@ -42,6 +42,17 @@ def mark(name: str) -> None:
     MARKS[name] = round(_process_age(), 3)
 
 
+def save_marks() -> None:
+    """Ghi thời gian khởi động lần này vào thư mục dữ liệu của app (xem trong Trợ giúp → Giới thiệu)."""
+    try:
+        import json
+        from .dialogs import data_dir
+        with open(os.path.join(data_dir(), "startup.json"), "w", encoding="utf-8") as f:
+            json.dump(MARKS, f)
+    except Exception:
+        pass
+
+
 def _instance_name() -> str:
     """Tên kênh nội bộ để các lần mở app của CÙNG một người dùng tìm thấy nhau."""
     import getpass

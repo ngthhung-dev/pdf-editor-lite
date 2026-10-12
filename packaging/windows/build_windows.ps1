@@ -104,6 +104,14 @@ foreach ($k in 1, 2) {
     Remove-Item Env:\LITEPDF_STARTUP_PROBE
     if (Test-Path $pj) { Note ("khoi dong lan ${k} (giay tu luc tao tien trinh): " + (Get-Content $pj -Raw)) } else { Note "khoi dong lan ${k}: khong do duoc" }
 }
+foreach ($opt in "windows:nodirectwrite", "windows:fontengine=freetype") {
+    $pj = Join-Path $work "startup_opt.json"
+    $env:LITEPDF_STARTUP_PROBE = $pj; $env:QT_QPA_PLATFORM = $opt
+    $sp = Start-Process -FilePath "$dist\PDFEditorLite.exe" -ArgumentList "`"$pdf`"" -PassThru
+    if (-not $sp.WaitForExit(120000)) { $sp.Kill() }
+    Remove-Item Env:\LITEPDF_STARTUP_PROBE; Remove-Item Env:\QT_QPA_PLATFORM
+    if (Test-Path $pj) { Note ("khoi dong voi ${opt}: " + (Get-Content $pj -Raw)); Remove-Item $pj } else { Note "khoi dong voi ${opt}: khong do duoc" }
+}
 Remove-Item -Recurse -Force "$dist\resources\tessdata"      # tessdata la thanh phan tuy chon, do bo cai chep vao
 
 # ---------------------------------------------------------------- 6. Tach thanh phan tuy chon RapidOCR
