@@ -18,6 +18,8 @@ def _process_age() -> float:
             ft = [wintypes.FILETIME() for _ in range(4)]
             now = wintypes.FILETIME()
             k = ctypes.windll.kernel32
+            k.GetCurrentProcess.restype = wintypes.HANDLE
+            k.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
             k.GetProcessTimes(k.GetCurrentProcess(), *[ctypes.byref(f) for f in ft])
             k.GetSystemTimeAsFileTime(ctypes.byref(now))
             v = lambda f: (f.dwHighDateTime << 32) | f.dwLowDateTime
@@ -120,10 +122,9 @@ def main(argv: list[str]) -> int:
     lock = None
     try:        # đã có một cửa sổ PDF Editor Lite đang mở: giao file cho nó rồi thoát, không mở cửa sổ thứ hai
         from PySide6.QtCore import QDir, QLockFile
-        if send_to_running(files):
-            return 0
-        # Chưa có cửa sổ nào nhận. Có thể nhiều file vừa được mở cùng lúc (chọn nhiều file rồi Enter): chỉ MỘT tiến trình
-        # giữ được khoá và trở thành cửa sổ chính, các tiến trình còn lại chờ nó khởi động xong rồi giao file cho nó.
+        # Cửa sổ chính giữ khoá suốt lúc chạy: lấy được khoá ngay nghĩa là chưa có cửa sổ nào, khỏi dò kênh (trên Windows
+        # việc dò kênh khi không có ai nghe mất gần nửa giây). Nhiều file mở cùng lúc: chỉ MỘT tiến trình giữ được khoá
+        # và thành cửa sổ chính, các tiến trình còn lại chờ nó khởi động xong rồi giao file cho nó.
         lock = QLockFile(os.path.join(QDir.tempPath(), _instance_name() + ".lock"))
         lock.setStaleLockTime(0)
         if not lock.tryLock(0):
@@ -136,6 +137,7 @@ def main(argv: list[str]) -> int:
                 time.sleep(0.25)
     except Exception:
         pass
+    mark("lock")
     splash = None
     try:
         splash = _splash(files)
