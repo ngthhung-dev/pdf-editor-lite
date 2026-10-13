@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 import pymupdf
-from PySide6.QtCore import QEvent, QEventLoop, QObject, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QEventLoop, QObject, QPoint, QPointF, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QCursor, QIcon, QImage, QKeySequence, QPainter, QPalette, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QColorDialog, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout,
                                QFileDialog, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -705,8 +705,8 @@ class HoverMenus(QObject):
 
 # ------------------------------------------------------------------ cửa sổ chính
 class FindBar(QFrame):
-    """Khung tìm nổi ở góc trên bên phải vùng tài liệu (giống trình duyệt): Ctrl+F mở, Esc đóng.
-    Cùng một vị trí, cùng một kiểu ở mọi cỡ cửa sổ."""
+    """Khung tìm nổi trên vùng tài liệu: Ctrl+F mở, Esc đóng. Mặc định ở giữa phía trên; kéo (nắm vào chấm ở đầu khung
+    hoặc phần nền của khung) để dời đi chỗ khác, vị trí được nhớ cho các lần sau; nhấp đúp vào chấm để về giữa."""
 
     def __init__(self, main: "MainWindow", host: QWidget):
         super().__init__(host)
@@ -727,8 +727,13 @@ class FindBar(QFrame):
         sh.setColor(QColor(0, 0, 0, 55))
         self.setGraphicsEffect(sh)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 4, 6, 4)
+        lay.setContentsMargins(6, 4, 6, 4)
         lay.setSpacing(4)
+        grip = QLabel()
+        grip.setPixmap(self._grip_pixmap())
+        grip.setCursor(Qt.SizeAllCursor)
+        grip.setToolTip("Kéo để dời khung tìm; nhấp đúp để đưa về giữa")
+        self.grip = grip
         mag = QLabel()
         mag.setPixmap(icon("search").pixmap(18, 18))
         self.edit = QLineEdit()
@@ -742,6 +747,7 @@ class FindBar(QFrame):
         sep = QFrame()
         sep.setObjectName("fbsep")
         sep.setFixedSize(1, 20)
+        lay.addWidget(grip)
         lay.addWidget(mag)
         lay.addWidget(self.edit)
         lay.addWidget(self.status)
@@ -770,8 +776,71 @@ class FindBar(QFrame):
             lambda: self.main.do_search(not (QApplication.keyboardModifiers() & Qt.ShiftModifier)))
         self.edit.textChanged.connect(self._sync)
         host.installEventFilter(self)
+        self._drag = None
         self._sync()
         self.hide()
+
+    @staticmethod
+    def _grip_pixmap():
+        from PySide6.QtGui import QPixmap
+        pm = QPixmap(10, 18)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#9aa0a6"))
+        for x in (2.5, 7.5):
+            for y in (4, 9, 14):
+                p.drawEllipse(QPointF(x, y), 1.4, 1.4)
+        p.end()
+        return pm
+
+    # -- kéo thả
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._drag = e.globalPosition().toPoint() - self.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._drag is not None:
+            self._move_to(e.globalPosition().toPoint() - self._drag)
+            e.accept()
+            return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self._drag is not None:
+            self._drag = None
+            self.unsetCursor()
+            h = self.host
+            room_x, room_y = max(1, h.width() - self.width()), max(1, h.height() - self.height())
+            self.main.cfg["find_pos"] = [round(self.x() / room_x, 4), round(self.y() / room_y, 4)]
+            self.main.cfg.save()
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
+
+    def mouseDoubleClickEvent(self, e):
+        if self.childAt(e.position().toPoint()) is self.grip:
+            self.main.cfg.pop("find_pos", None)
+            self.main.cfg.save()
+            self.place()
+            e.accept()
+            return
+        super().mouseDoubleClickEvent(e)
+
+    def _top(self) -> int:
+        h = self.host
+        return 8 + (h.tabBar().height() if isinstance(h, QTabWidget) else 0)
+
+    def _move_to(self, pt):
+        h = self.host
+        x = min(max(4, pt.x()), max(4, h.width() - self.width() - 4))
+        y = min(max(self._top() - 4, pt.y()), max(self._top(), h.height() - self.height() - 4))
+        self.move(x, y)
 
     def _sync(self, *_):
         has = bool(self.edit.text().strip())
@@ -801,13 +870,16 @@ class FindBar(QFrame):
         super().keyPressEvent(e)
 
     def place(self):
-        """Góc trên bên phải vùng xem tài liệu, ngay dưới hàng tab, chừa thanh cuộn."""
+        """Mặc định: giữa phía trên vùng tài liệu, ngay dưới hàng tab. Người dùng đã kéo đi đâu thì đặt lại đúng chỗ đó
+        (tính theo tỉ lệ, nên cửa sổ đổi cỡ khung vẫn ở vị trí tương ứng và không bị khuất)."""
         self.adjustSize()
         h = self.host
-        top = 8
-        if isinstance(h, QTabWidget):
-            top += h.tabBar().height()
-        self.move(max(6, h.width() - self.width() - 26), top)
+        pos = self.main.cfg.get("find_pos")
+        if isinstance(pos, list) and len(pos) == 2:
+            self._move_to(QPoint(int(pos[0] * max(1, h.width() - self.width())),
+                                 int(pos[1] * max(1, h.height() - self.height()))))
+        else:
+            self._move_to(QPoint((h.width() - self.width()) // 2, self._top()))
 
     def eventFilter(self, obj, ev):
         if obj is self.host and ev.type() == QEvent.Resize and self.isVisible():
