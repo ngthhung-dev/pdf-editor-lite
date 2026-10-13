@@ -135,7 +135,8 @@ $hasRapid = Test-Path (Join-Path $rapid "rapidocr")
 
 # ---------------------------------------------------------------- 7. LibreOffice, Ollama, model
 Step "7/8  Tai LibreOffice / Ollama / model dich"
-$defs = @("/DAppVer=1.0.0")
+$bn = if ($env:LITEPDF_BUILD) { $env:LITEPDF_BUILD } else { "0" }
+$defs = @("/DAppVer=1.0.0", "/DBuild=$bn")
 Note "tham so: NoLibreOffice=$NoLibreOffice NoOllama=$NoOllama NoModel=$NoModel Model=$Model"
 if ($hasRapid) { $defs += "/DWithRapid=1" }
 if (-not $NoLibreOffice) {
@@ -194,4 +195,8 @@ if ($LASTEXITCODE -ne 0) { Add-Content -Path $log -Value (Get-Content $isslog -T
 Write-Host ""
 Write-Host "XONG. File cai nam trong: $(Join-Path $work 'output')" -ForegroundColor Green
 Get-ChildItem (Join-Path $work "output") | ForEach-Object { Note ("XONG: " + $_.Name + "  " + [math]::Round($_.Length / 1MB) + " MB") }
+foreach ($f in @((Get-ChildItem (Join-Path $work "output") -Filter *.exe | Select-Object -First 1).FullName, "$dist\PDFEditorLite.exe")) {
+    $v = (Get-Item $f).VersionInfo
+    Note ("thong tin " + (Split-Path $f -Leaf) + ": mo ta=[" + $v.FileDescription + "] phien ban file=[" + $v.FileVersion + "] san pham=[" + $v.ProductName + " " + $v.ProductVersion + "] cong ty=[" + $v.CompanyName + "] ban quyen=[" + $v.LegalCopyright + "] ghi chu=[" + $v.Comments + "]")
+}
 Get-ChildItem (Join-Path $work "output") | Format-Table Name, @{n="MB"; e={[math]::Round($_.Length / 1MB)}}

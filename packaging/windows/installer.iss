@@ -3,6 +3,9 @@
 #ifndef AppVer
   #define AppVer "1.0.0"
 #endif
+#ifndef Build
+  #define Build "0"
+#endif
 #ifndef Model
   #define Model "gemma3:4b"
 #endif
@@ -14,16 +17,20 @@
 AppId={{6C1E6C0B-7B0E-4E7B-9B1B-2F5C3F0E9A41}
 AppName={#AppName}
 AppVersion={#AppVer}
-AppVerName={#AppName} {#AppVer}
+AppVerName={#AppName} {#AppVer} (build {#Build})
 AppPublisher=ngthhung
-VersionInfoVersion={#AppVer}.0
-VersionInfoTextVersion={#AppVer}.0
-VersionInfoProductVersion={#AppVer}.0
+VersionInfoVersion={#AppVer}.{#Build}
+VersionInfoTextVersion={#AppVer}.{#Build}
+VersionInfoProductVersion={#AppVer}.{#Build}
 VersionInfoProductTextVersion={#AppVer}
 VersionInfoProductName={#AppName}
 VersionInfoCompany=ngthhung
 VersionInfoDescription={#AppName} by ngthhung
-VersionInfoCopyright=ngthhung
+VersionInfoCopyright=Copyright © 2026 ngthhung
+AppCopyright=Copyright © 2026 ngthhung
+AppContact=ngthhung.dev@gmail.com
+AppSupportPhone=0968 799 365
+AppComments={#AppName} by ngthhung
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes

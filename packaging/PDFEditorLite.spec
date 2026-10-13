@@ -36,12 +36,23 @@ if tess and os.path.isdir(tess):
 
 icon = os.path.join(ROOT, "assets", "app_icon.ico") if sys.platform.startswith("win") else os.environ.get("LITEPDF_ICNS")
 
+def _version_file():
+    """Thông tin phiên bản của PDFEditorLite.exe (Properties → Details), điền số build vào."""
+    src = open(os.path.join(SPECPATH, "windows", "version_info.txt"), encoding="utf-8").read()
+    build = "".join(ch for ch in os.environ.get("LITEPDF_BUILD", "0") if ch.isdigit()) or "0"
+    out = os.path.join(os.path.abspath(os.path.join(SPECPATH, "..", "build_win")), "version_info.txt")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(src.replace("@B@", build).replace("\\u00a9", "\u00a9"))
+    return out
+
+
 a = Analysis([os.path.join(ROOT, "main.py")], pathex=[ROOT], binaries=binaries, datas=datas, hiddenimports=hidden,
              excludes=["tkinter", "matplotlib", "IPython", "pytest", "PyQt5", "PyQt6", "PySide2", "torch", "paddle"],
              noarchive=False)
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="PDFEditorLite", console=False, icon=icon,
-          version=os.path.join(SPECPATH, "windows", "version_info.txt") if sys.platform.startswith("win") else None)
+          version=_version_file() if sys.platform.startswith("win") else None)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="PDFEditorLite")
 
 if sys.platform == "darwin":
@@ -50,7 +61,8 @@ if sys.platform == "darwin":
                      "CFBundleDisplayName": "PDF Editor Lite", "CFBundleName": "PDF Editor Lite",
                      "CFBundleShortVersionString": "1.0.0", "CFBundleVersion": os.environ.get("LITEPDF_BUILD", "1"),
                      "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "12.0",
-                     "NSHumanReadableCopyright": "PDF Editor Lite by ngthhung",
+                     "NSHumanReadableCopyright": "Copyright \u00a9 2026 ngthhung",
+                     "CFBundleGetInfoString": "PDF Editor Lite 1.0.0 by ngthhung",
                      "CFBundleDocumentTypes": [{
                          "CFBundleTypeName": "PDF", "CFBundleTypeRole": "Editor", "LSHandlerRank": "Alternate",
                          "LSItemContentTypes": ["com.adobe.pdf"], "CFBundleTypeExtensions": ["pdf"]}],

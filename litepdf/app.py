@@ -30,6 +30,9 @@ except Exception:
     BUILD = ""
 VERSION_TEXT = VERSION + (f" (build {BUILD})" if BUILD else "")
 AUTHOR = "ngthhung"
+CONTACT_EMAIL = "ngthhung.dev@gmail.com"
+CONTACT_PHONE = "0968 799 365"
+COPYRIGHT = "Copyright © 2026 ngthhung"
 DEFAULT_SIZE = (1100, 720)  # kích thước cửa sổ khi mở app
 OPEN_FILTER = ("Tất cả file hỗ trợ (*.pdf *.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp *.doc *.docx *.xls "
                "*.xlsx *.ppt *.pptx *.odt *.ods *.odp *.rtf *.txt *.html *.htm *.epub *.xps *.svg);;"
@@ -2877,7 +2880,8 @@ class MainWindow(QMainWindow):
         d = ReportDialog(self, "Giới thiệu",
                          "<style>p,td{font-size:13px;line-height:150%} td{padding:3px 12px 3px 0;vertical-align:top}</style>"
                          f"<h2 style='margin:2px 0'>{APP_NAME}</h2>"
-                         f"<p><b>{APP_NAME} by {AUTHOR}</b><br>Phiên bản {VERSION_TEXT} · lõi PDF: PyMuPDF {pymupdf.VersionBind}</p>"
+                         f"<p><b>{APP_NAME} by {AUTHOR}</b><br>Phiên bản {VERSION_TEXT} · lõi PDF: PyMuPDF {pymupdf.VersionBind}<br>"
+                         f"{COPYRIGHT}<br>Liên hệ: {CONTACT_EMAIL} · {CONTACT_PHONE}</p>"
                          "<p>Trình xem và chỉnh sửa PDF gọn nhẹ. Cách dùng: Trợ giúp → Hướng dẫn sử dụng (F1).</p>"
                          "<h3 style='color:#1a56c4;margin:12px 0 2px 0'>Tình trạng các thành phần trên máy này</h3>"
                          + self.component_status() + self._startup_report() +
