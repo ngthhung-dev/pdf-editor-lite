@@ -81,6 +81,7 @@ Name: "ollama\model"; Description: "Model dịch {#Model} (TẢI VỀ khi cài: 
 [Tasks]
 Name: "desktopicon"; Description: "Tạo lối tắt ngoài Desktop"
 Name: "assocpdf"; Description: "Thêm PDF Editor Lite vào danh sách chương trình mở file .pdf (Open with)"
+Name: "faststart"; Description: "Khởi động nhanh: chạy sẵn PDF Editor Lite (ẩn) khi đăng nhập Windows, mở file PDF là hiện ngay (app luôn chạy nền, tốn thêm một ít RAM)"
 
 [Files]
 Source: "{#Work}\dist\PDFEditorLite\*"; DestDir: "{app}"; Components: core; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -113,6 +114,8 @@ Name: "{group}\Gỡ cài đặt {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\_internal\assets\app_icon.ico"; AppUserModelID: "ngthhung.PDFEditorLite"; Tasks: desktopicon
 
 [Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "PDFEditorLite"; ValueData: """{app}\{#AppExe}"" --background"; Flags: uninsdeletevalue; Tasks: faststart
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "PDFEditorLite"; Flags: deletevalue uninsdeletevalue; Tasks: not faststart
 ; Dang ky de app xuat hien trong "Open with" va trong Settings > Default apps. Windows 10/11 khong cho bo cai tu dat
 ; lam mac dinh: nguoi dung chon "Always" o lan mo dau, hoac vao Default apps.
 Root: HKA; Subkey: "Software\Classes\PDFEditorLite.pdf"; ValueType: string; ValueData: "Tài liệu PDF"; Flags: uninsdeletekey; Tasks: assocpdf
@@ -141,6 +144,7 @@ Filename: "{tmp}\OllamaSetup.exe"; Parameters: "/VERYSILENT /NORESTART"; Compone
 Filename: "{code:OllamaExe}"; Parameters: "pull {#Model}"; Components: ollama\model; Check: HasOllama; StatusMsg: "Đang tải model dịch {#Model} (vài GB, cần mạng; có thể mất khá lâu)..."; Flags: waituntilterminated runasoriginaluser
 #endif
 #endif
+Filename: "{app}\{#AppExe}"; Parameters: "--background"; Tasks: faststart; Flags: nowait runasoriginaluser
 Filename: "{app}\{#AppExe}"; Description: "Mở {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]

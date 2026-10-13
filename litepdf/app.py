@@ -1045,7 +1045,12 @@ class MainWindow(QMainWindow):
         A("Thông tin tài liệu", self.doc_info, "Ctrl+D", menu=m)
         m.addSeparator()
         A("Đóng tab", lambda: self.close_tab(self.tabs.currentIndex()), "Ctrl+W", menu=m, guard=False)
-        A("Thoát", self.close, "Ctrl+Q", doc=False, menu=m, guard=False)
+        self.a_fast = A("Khởi động nhanh (chạy sẵn khi bật máy)", lambda: self.set_fast_start(self.a_fast.isChecked()),
+                        doc=False, menu=m, guard=False,
+                        tip="Chạy sẵn PDF Editor Lite (ẩn, biểu tượng ở khay hệ thống) khi đăng nhập máy: mở file PDF là hiện ngay. "
+                            "Đóng cửa sổ thì app vẫn chạy nền; muốn tắt hẳn dùng Tệp → Thoát")
+        self.a_fast.setCheckable(True)
+        A("Thoát", self.quit_app, "Ctrl+Q", doc=False, menu=m, guard=False)
         # --- Sửa
         m = mb.addMenu("&Sửa")
         self.a_undo = A("Hoàn tác", self.undo, "Ctrl+Z", "undo", menu=m)
@@ -1722,7 +1727,87 @@ class MainWindow(QMainWindow):
                 e.ignore()
                 return
         self.cfg.save()
+        if getattr(self, "_resident", False) and not getattr(self, "_quitting", False):
+            # khởi động nhanh: đóng các tab, ẩn cửa sổ, app vẫn chạy nền để lần mở sau hiện ngay
+            for i in range(self.tabs.count() - 1, -1, -1):
+                self.close_tab(i, force=True)
+            if getattr(self, "find_bar", None) is not None:
+                self.find_bar.hide()
+            self.hide()
+            e.ignore()
+            return
         e.accept()
+
+    # ---------------------------------------------------------------- khởi động nhanh
+    def setup_resident(self, background: bool) -> None:
+        from . import faststart
+        on = faststart.is_enabled()
+        self.a_fast.setChecked(on)
+        self._resident = on or background
+        if self._resident:
+            self._make_tray()
+            QApplication.instance().setQuitOnLastWindowClosed(False)
+            if background:       # dựng sẵn mọi thứ (phông chữ, kiểu giao diện) trong lúc chưa ai cần tới
+                QTimer.singleShot(1500, self, lambda: self.isVisible() or self.grab())
+
+    def _make_tray(self) -> None:
+        if getattr(self, "_tray", None) is not None:
+            return
+        from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        tray = QSystemTrayIcon(QApplication.instance().windowIcon(), self)
+        tray.setToolTip(APP_NAME + " (khởi động nhanh)")
+        menu = QMenu(self)
+        menu.addAction("Mở " + APP_NAME, self.bring_up)
+        menu.addSeparator()
+        menu.addAction("Thoát hẳn", self.quit_app)
+        tray.setContextMenu(menu)
+        tray.activated.connect(lambda r: self.bring_up() if r in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick) else None)
+        tray.show()
+        self._tray = tray
+
+    def bring_up(self) -> None:
+        if not self.isVisible():
+            self.place_centered()
+            self.show()
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def quit_app(self) -> None:
+        self._quitting = True
+        if self.close():
+            tray = getattr(self, "_tray", None)
+            if tray is not None:
+                tray.hide()
+            QApplication.instance().quit()
+        else:
+            self._quitting = False
+
+    def set_fast_start(self, on: bool) -> None:
+        from . import faststart
+        try:
+            faststart.set_enabled(on)
+        except Exception as ex:
+            self.a_fast.setChecked(faststart.is_enabled())
+            self.error(f"Không đổi được thiết lập khởi động nhanh:\n{ex}")
+            return
+        self._resident = on
+        if on:
+            self._make_tray()
+            QApplication.instance().setQuitOnLastWindowClosed(False)
+            self.info("Đã bật khởi động nhanh.\n\nTừ lần bật máy sau, PDF Editor Lite chạy sẵn ở chế độ ẩn (biểu tượng ở khay "
+                      "hệ thống, góc dưới bên phải màn hình): mở file PDF là hiện ngay, không phải chờ.\n\n"
+                      "Đóng cửa sổ thì app vẫn chạy nền. Muốn tắt hẳn: Tệp → Thoát, hoặc chuột phải biểu tượng ở khay → Thoát hẳn.")
+        else:
+            tray = getattr(self, "_tray", None)
+            if tray is not None:
+                tray.hide()
+                self._tray = None
+            QApplication.instance().setQuitOnLastWindowClosed(True)
+            self.msg("Đã tắt khởi động nhanh.")
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
@@ -2917,9 +3002,7 @@ def listen_for_files(win) -> None:
             conn.write(b"ok")
             conn.flush()
             conn.disconnectFromServer()
-            if win.isMinimized():
-                win.showNormal()
-            win.raise_()
+            win.bring_up()
             win.activateWindow()
             for f in files:
                 if os.path.exists(f):
@@ -2934,7 +3017,7 @@ def run(argv: list[str]) -> int:
     return main(argv)
 
 
-def start(app, files: list[str], lock, splash=None) -> int:
+def start(app, files: list[str], lock, splash=None, background: bool = False) -> int:
     """Phần còn lại của việc khởi động, sau khi khung chờ đã hiện (xem launch.py)."""
     from . import launch
     from . import vi_qt
@@ -2993,7 +3076,9 @@ def start(app, files: list[str], lock, splash=None) -> int:
     win = MainWindow()
     launch.mark("mainwindow")
     win.place_centered()
-    win.show()
+    win.setup_resident(background)
+    if not background:
+        win.show()
     if splash is not None:
         splash.finish(win)
     launch.mark("window")

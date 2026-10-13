@@ -122,6 +122,7 @@ def main(argv: list[str]) -> int:
     app = QApplication(argv)
     mark("qt")
     files = [os.path.abspath(a) for a in argv[1:] if not a.startswith("-") and os.path.exists(a)]
+    background = "--background" in argv          # chạy sẵn khi đăng nhập máy (khởi động nhanh): không hiện cửa sổ
     lock = None
     try:        # đã có một cửa sổ PDF Editor Lite đang mở: giao file cho nó rồi thoát, không mở cửa sổ thứ hai
         from PySide6.QtCore import QDir, QLockFile
@@ -131,6 +132,8 @@ def main(argv: list[str]) -> int:
         lock = QLockFile(os.path.join(QDir.tempPath(), _instance_name() + ".lock"))
         lock.setStaleLockTime(0)
         if not lock.tryLock(0):
+            if background:                       # đã có PDF Editor Lite đang chạy: không cần chạy sẵn thêm
+                return 0
             end = time.time() + 25
             while time.time() < end:
                 if send_to_running(files):
@@ -143,11 +146,12 @@ def main(argv: list[str]) -> int:
     mark("lock")
     splash = None
     try:
-        splash = _splash(files)
-        app.processEvents()
+        if not background:
+            splash = _splash(files)
+            app.processEvents()
     except Exception:
         pass
     mark("splash")
     from .app import start
     mark("import")
-    return start(app, files, lock, splash)
+    return start(app, files, lock, splash, background)

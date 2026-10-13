@@ -72,6 +72,8 @@ Danh sách phím tắt đầy đủ: trong app bấm **Ctrl+F1**.
 
 3. Đặt làm chương trình mở PDF mặc định: chuột phải file .pdf → **Open with → Choose another app** → PDF Editor Lite → **Always**. Khung Preview của Explorer vẫn xem trước được PDF.
 
+**Khởi động nhanh** (tích ở bước cài, hoặc trong app: Tệp → Khởi động nhanh): app chạy sẵn ẩn khi đăng nhập máy, nhấp đúp file PDF là hiện ngay. Rất nên bật nếu máy cài nhiều phông chữ, vì lần mở đầu tiên sau khi bật máy sẽ chậm. Đóng cửa sổ thì app vẫn chạy nền (biểu tượng ở khay hệ thống); tắt hẳn bằng Tệp → Thoát.
+
 Gỡ cài đặt: **Settings → Apps → Installed apps → PDF Editor Lite → Uninstall**.
 
 ### macOS

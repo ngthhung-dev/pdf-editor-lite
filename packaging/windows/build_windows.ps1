@@ -104,6 +104,15 @@ foreach ($k in 1, 2) {
     Remove-Item Env:\LITEPDF_STARTUP_PROBE
     if (Test-Path $pj) { Note ("khoi dong lan ${k} (giay tu luc tao tien trinh): " + (Get-Content $pj -Raw)) } else { Note "khoi dong lan ${k}: khong do duoc" }
 }
+# Khoi dong nhanh: chay san an (--background), roi do thoi gian mo mot file PDF bang cach giao cho ban chay san
+$bg = Start-Process -FilePath "$dist\PDFEditorLite.exe" -ArgumentList "--background" -PassThru
+Start-Sleep -Seconds 12
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$h = Start-Process -FilePath "$dist\PDFEditorLite.exe" -ArgumentList "`"$pdf`"" -PassThru
+if (-not $h.WaitForExit(60000)) { $h.Kill() }
+Note ("khoi dong nhanh: giao file cho ban chay san mat " + [math]::Round($sw.Elapsed.TotalSeconds, 2) + " giay, ban chay san con song: " + (-not $bg.HasExited))
+if (-not $bg.HasExited) { $bg.Kill() }
+Start-Sleep -Seconds 1
 foreach ($opt in "windows:nodirectwrite", "windows:fontengine=freetype") {
     $pj = Join-Path $work "startup_opt.json"
     $env:LITEPDF_STARTUP_PROBE = $pj; $env:QT_QPA_PLATFORM = $opt
