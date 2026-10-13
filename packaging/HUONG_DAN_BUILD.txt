@@ -12,6 +12,9 @@ CACH 1 - BUILD TU DONG TREN GITHUB (khuyen dung, khong can cai gi tren may)
   Chay tay: tab Actions > "Build installers (Windows, macOS, Linux)" > Run workflow
   (tuy chon cho Windows: kem LibreOffice, kem Ollama, kem san model dich).
 
+  Don ban cu: Actions > "Dọn Release cũ" > Run workflow. Xoa Release cu, tag cu, toan bo Artifacts
+  va lich su cac lan chay truoc; chi giu Release moi nhat.
+
 CACH 2 - BUILD TREN MAY WINDOWS
   Can: Python 3.10-3.13 64-bit (tick "Add python.exe to PATH"), Inno Setup 6 (https://jrsoftware.org/isdl.php),
        mang Internet, o dia trong ~6 GB (~12 GB neu kem model dich).

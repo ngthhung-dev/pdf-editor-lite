@@ -3,7 +3,7 @@ name: Build installers (Windows, macOS, Linux)
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md', 'packaging/**.txt']
+    paths-ignore: ['**.md', 'packaging/**.txt', '.github/workflows/don-release.yml']
   workflow_dispatch:
     inputs:
       libreoffice:
@@ -184,7 +184,7 @@ jobs:
       - name: Don nhanh thu nghiem (neu con)
         continue-on-error: true
         run: |
-          for b in mac-test mac-test-logs-arm64 mac-test-logs-intel font-test font-test-logs; do
+          for b in mac-test mac-test-logs-arm64 mac-test-logs-intel font-test font-test-logs don-release; do
             git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" --delete "$b" || true
           done
         working-directory: logs

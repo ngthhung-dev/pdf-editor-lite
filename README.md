@@ -117,6 +117,8 @@ Hoặc chạy `PDFEditorLite.bat` (Windows), `PDFEditorLite.sh` (Linux), `PDFEdi
 
 Mỗi lần đẩy mã lên nhánh `main`, GitHub Actions (`.github/workflows/build-windows.yml`) tự build cả 4 bộ cài, cài thử, chạy tự kiểm tra rồi phát hành vào mục Releases với cùng một số build.
 
+Dọn bản cũ: vào **Actions → Dọn Release cũ → Run workflow**. Mỗi lần chạy sẽ xoá Release cũ, tag cũ, toàn bộ Artifacts và lịch sử các lần chạy trước, chỉ giữ Release mới nhất.
+
 Build trên máy riêng (xem thêm [`packaging/HUONG_DAN_BUILD.txt`](packaging/HUONG_DAN_BUILD.txt)):
 
 | Hệ điều hành | Lệnh | Kết quả |

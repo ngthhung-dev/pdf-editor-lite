@@ -1,0 +1,57 @@
+name: Dọn Release cũ
+
+# Mỗi lần chạy: xoá Release cũ, tag cũ, toàn bộ Artifacts và lịch sử các lần chạy trước; chỉ giữ Release mới nhất.
+# Chạy tay: Actions → Dọn Release cũ → Run workflow. (Đẩy nhánh "don-release" lên cũng chạy; nhánh tự xoá khi xong.)
+on:
+  workflow_dispatch:
+  push:
+    branches: [don-release]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: don-release
+
+jobs:
+  don:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      R: ${{ github.repository }}
+    steps:
+      - name: Release và tag cũ
+        run: |
+          latest=$(gh api repos/$R/releases/latest --jq .tag_name 2>/dev/null || true)
+          if [ -z "$latest" ]; then echo "Chưa có Release nào: không xoá gì."; exit 0; fi
+          echo "Giữ lại: $latest"
+          for t in $(gh api repos/$R/releases --paginate --jq '.[].tag_name'); do
+            [ "$t" = "$latest" ] && continue
+            gh release delete "$t" -R $R --yes --cleanup-tag && echo "Đã xoá release $t"
+          done
+          for t in $(gh api repos/$R/tags --paginate --jq '.[].name'); do
+            [ "$t" = "$latest" ] && continue
+            gh api -X DELETE "repos/$R/git/refs/tags/$t" && echo "Đã xoá tag $t"
+          done
+      - name: Artifacts
+        run: |
+          n=0
+          for id in $(gh api "repos/$R/actions/artifacts?per_page=100" --paginate --jq '.artifacts[].id'); do
+            gh api -X DELETE "repos/$R/actions/artifacts/$id" && n=$((n+1))
+          done
+          echo "Đã xoá $n artifact"
+      - name: Lịch sử các lần chạy trước
+        run: |
+          n=0
+          for id in $(gh api "repos/$R/actions/runs?per_page=100&status=completed" --paginate --jq '.workflow_runs[].id'); do
+            [ "$id" = "${{ github.run_id }}" ] && continue
+            gh api -X DELETE "repos/$R/actions/runs/$id" && n=$((n+1)) || true
+          done
+          echo "Đã xoá $n lần chạy (lần đang chạy dở, nếu có, được giữ lại)"
+      - name: Kết quả
+        if: always()
+        run: |
+          echo "Release còn lại:"; gh api repos/$R/releases --jq '.[].tag_name'
+          echo "Tag còn lại:"; gh api repos/$R/tags --jq '.[].name'
+          gh api -X DELETE repos/$R/git/refs/heads/don-release 2>/dev/null || true
