@@ -2584,8 +2584,10 @@ class MainWindow(QMainWindow):
         from . import launch
         m = launch.MARKS
         steps = [("python", "Nạp chương trình (Windows nạp file, quét virus…)"), ("qt", "Nạp giao diện Qt"),
-                 ("splash", "Hiện khung chờ"), ("import", "Nạp thư viện PDF và các chức năng"), ("style", "Cài giao diện"),
-                 ("fonts", f"Dò phông chữ trên máy ({m.get('so_phong', '?')} họ phông)"), ("mainwindow", "Dựng cửa sổ chính"),
+                 ("splash", "Hiện khung chờ"), ("import", "Nạp thư viện PDF và các chức năng"),
+                 ("vi", "Nạp bản dịch tiếng Việt của Qt"), ("icon", "Biểu tượng app"), ("fusion", "Kiểu giao diện"),
+                 ("style", "Bảng màu"), ("fonts", f"Dò phông chữ trên máy ({m.get('so_phong', '?')} họ phông)"),
+                 ("textuse", "Dùng phông lần đầu"), ("mainwindow", "Dựng cửa sổ chính"),
                  ("window", "Hiện cửa sổ"), ("file", "Đọc file PDF"), ("painted", "Vẽ trang đầu")]
         rows, prev = [], 0.0
         for k, label in steps:
@@ -2748,6 +2750,7 @@ def start(app, files: list[str], lock, splash=None) -> int:
     from . import launch
     from . import vi_qt
     vi_qt.install(app)            # nút và hộp thoại chuẩn của Qt hiện bằng tiếng Việt
+    launch.mark("vi")
     app._instance_lock = lock
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(VERSION)
@@ -2760,7 +2763,9 @@ def start(app, files: list[str], lock, splash=None) -> int:
             pass
     from .icons import app_icon
     app.setWindowIcon(app_icon())
+    launch.mark("icon")
     app.setStyle("Fusion")
+    launch.mark("fusion")
     pal = QPalette()
     pal.setColor(QPalette.Window, QColor("#f6f7f9"))
     pal.setColor(QPalette.WindowText, QColor("#202124"))
@@ -2786,6 +2791,12 @@ def start(app, files: list[str], lock, splash=None) -> int:
     except Exception:
         pass
     launch.mark("fonts")
+    try:        # vẽ thử một dòng chữ có dấu: lần đầu dùng phông thật sự (đo riêng)
+        from PySide6.QtGui import QFontMetrics
+        QFontMetrics(app.font()).horizontalAdvance("Tệp Sửa Xem Trang Công cụ")
+    except Exception:
+        pass
+    launch.mark("textuse")
     app.setStyleSheet("QToolBar{border:0;border-bottom:1px solid #dadce0;spacing:2px;padding:3px;background:#f6f7f9;}"
                       "QToolButton{padding:3px;border-radius:4px;} QToolButton:hover{background:#e3e6ea;}"
                       "QToolButton:checked{background:#d2e3fc;} QStatusBar{color:#3c4043;}"

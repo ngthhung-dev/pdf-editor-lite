@@ -420,6 +420,17 @@ def paint_app_icon(size: int = 256) -> QPixmap:
 
 
 def app_icon() -> QIcon:
+    """Biểu tượng app: lấy từ file ảnh có sẵn (không phải vẽ chữ lúc khởi động); thiếu file thì tự vẽ."""
+    import os
+    import sys
+    roots = [getattr(sys, "_MEIPASS", ""), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+    for r in roots:
+        for n in ("app_icon.ico", "app_icon.png"):
+            f = os.path.join(r, "assets", n) if r else ""
+            if f and os.path.isfile(f):
+                ic = QIcon(f)
+                if not ic.isNull():
+                    return ic
     ic = QIcon()
     for s in (16, 24, 32, 48, 64, 128, 256):
         ic.addPixmap(paint_app_icon(s))
