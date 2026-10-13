@@ -81,8 +81,8 @@ SHORTCUTS = {
     # Chuyển đổi (Ctrl+Alt + chữ đầu của thứ cần ra: Dịch, Word, Excel, Image, Text, HTML, OCR, Nén)
     "Dịch tài liệu sang ngôn ngữ khác…": "Ctrl+Alt+D", "Rà soát / sửa câu dịch của trang này…": "Ctrl+Alt+R",
     "PDF → Word (.docx)…": "Ctrl+Alt+W", "PDF → Excel (.xlsx)…": "Ctrl+Alt+E", "PDF → Ảnh (PNG/JPG)…": "Ctrl+Alt+I",
-    "PDF → Văn bản (.txt)…": "Ctrl+Alt+T", "Xuất mọi hình ảnh trong PDF ra thư mục…": "Ctrl+Alt+X",
-    "PDF → HTML…": "Ctrl+Alt+H", "Tách file PDF…": "Ctrl+Shift+T", "Nhận dạng chữ (OCR) cho bản scan…": "Ctrl+Alt+O",
+    "PDF → Văn bản (.txt)…": "Ctrl+Alt+T", "PDF → HTML…": "Ctrl+Alt+H",
+    "Xuất mọi hình ảnh trong PDF ra thư mục…": "Ctrl+Alt+X", "Tách file PDF…": "Ctrl+Shift+T", "Nhận dạng chữ (OCR) cho bản scan…": "Ctrl+Alt+O",
     "Nén giảm dung lượng…": "Ctrl+Alt+N",
     # Ký & Bảo mật
     "Ký số (chọn vị trí hiện chữ ký)…": "Ctrl+Shift+K", "Kiểm tra chữ ký số": "Ctrl+Shift+V",
@@ -959,8 +959,8 @@ class MainWindow(QMainWindow):
         A("PDF → Excel (.xlsx)…", self.to_excel, menu=m)
         A("PDF → Ảnh (PNG/JPG)…", self.to_images, menu=m)
         A("PDF → Văn bản (.txt)…", self.to_text, menu=m)
-        A("Xuất mọi hình ảnh trong PDF ra thư mục…", self.export_images, menu=m)
         A("PDF → HTML…", self.to_html, menu=m)
+        A("Xuất mọi hình ảnh trong PDF ra thư mục…", self.export_images, menu=m)
         m.addSeparator()
         self.a_split = A("Tách file PDF…", self.split, None, "split", menu=m)
         A("Nhận dạng chữ (OCR) cho bản scan…", self.ocr, menu=m)
