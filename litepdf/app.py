@@ -10,7 +10,7 @@ from pathlib import Path
 import pymupdf
 from PySide6.QtCore import QEvent, QEventLoop, QObject, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QCursor, QIcon, QImage, QKeySequence, QPainter, QPalette, QPixmap)
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QColorDialog, QComboBox, QDoubleSpinBox,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QColorDialog, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout,
                                QFileDialog, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QMainWindow, QMessageBox, QProgressDialog, QSizePolicy, QSpinBox,
                                QSplitter, QSplitterHandle, QStackedWidget, QTabWidget, QToolBar, QToolButton, QVBoxLayout,
@@ -704,6 +704,66 @@ class HoverMenus(QObject):
 
 
 # ------------------------------------------------------------------ cửa sổ chính
+class FindBar(QFrame):
+    """Thanh tìm nổi (khi ô tìm trên thanh công cụ bị khuất vì cửa sổ hẹp). Dùng chung nội dung với ô tìm đó."""
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__(main)
+        self.main = main
+        self.setObjectName("findbar")
+        self.setStyleSheet("#findbar{background:#ffffff;border:1px solid #c4c7c5;border-radius:6px;}")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 5, 5, 5)
+        lay.setSpacing(4)
+        self.edit = QLineEdit()
+        self.edit.setPlaceholderText("Tìm trong tài liệu…")
+        self.edit.setClearButtonEnabled(True)
+        self.edit.setFixedWidth(220)
+        self.status = QLabel("")
+        self.status.setMinimumWidth(70)
+        self.status.setStyleSheet("color:#5f6368;")
+        lay.addWidget(self.edit)
+        lay.addWidget(self.status)
+        for arrow, fwd, tip in ((Qt.UpArrow, False, "Tìm ngược lại (Shift+F3)"), (Qt.DownArrow, True, "Tìm tiếp (F3)")):
+            b = QToolButton()
+            b.setArrowType(arrow)
+            b.setAutoRaise(True)
+            b.setToolTip(tip)
+            b.clicked.connect(lambda _=False, f=fwd: self.go(f))
+            lay.addWidget(b)
+        close = QToolButton()
+        close.setText("×")
+        close.setAutoRaise(True)
+        close.setToolTip("Đóng (Esc)")
+        close.clicked.connect(self.close_bar)
+        lay.addWidget(close)
+        self.edit.textEdited.connect(self.main.search_box.setText)
+        self.edit.returnPressed.connect(lambda: self.go(not (QApplication.keyboardModifiers() & Qt.ShiftModifier)))
+        self.hide()
+
+    def go(self, forward: bool):
+        self.main.search_box.setText(self.edit.text())
+        self.main.do_search(forward)
+
+    def close_bar(self):
+        self.hide()
+        t = self.main.tab()
+        if t:
+            t.viewer.setFocus()
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape:
+            self.close_bar()
+            return
+        super().keyPressEvent(e)
+
+    def place(self):
+        self.adjustSize()
+        c = self.main.centralWidget()
+        top = c.geometry().top() if c is not None else 80
+        self.move(max(8, self.main.width() - self.width() - 24), top + 6)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -871,7 +931,7 @@ class MainWindow(QMainWindow):
         A("Sao chép chữ / hình ảnh đang chọn", lambda t: t.viewer.copy_selection(), "Ctrl+C", menu=m)
         A("Lưu hình ảnh đang chọn thành file…", lambda t: t.viewer.save_image(), menu=m)
         A("Xoá hình ảnh đang chọn khỏi trang", lambda t: t.viewer.delete_image(), menu=m)
-        A("Tìm…", lambda: (self.search_box.setFocus(), self.search_box.selectAll()), "Ctrl+F", menu=m, guard=False)
+        A("Tìm…", self.show_find, "Ctrl+F", menu=m, guard=False)
         A("Tìm tiếp", lambda: self.do_search(True), "F3", menu=m, guard=False)
         A("Tìm ngược lại", lambda: self.do_search(False), "Shift+F3", menu=m, guard=False)
         m.addSeparator()
@@ -1307,7 +1367,39 @@ class MainWindow(QMainWindow):
     def do_search(self, forward: bool):
         t = self.tab()
         if t:
-            self.search_lb.setText(" " + t.viewer.search(self.search_box.text(), forward))
+            self._search_status(t.viewer.search(self.search_box.text(), forward))
+
+    def _search_status(self, s: str) -> None:
+        self.search_lb.setText(" " + s)
+        fb = getattr(self, "find_bar", None)
+        if fb is not None:
+            fb.status.setText(s)
+
+    def show_find(self):
+        """Ctrl+F: ô tìm trên thanh công cụ; cửa sổ hẹp làm ô đó bị dồn vào nút » thì hiện thanh tìm nổi ở góc trên phải."""
+        if self.search_box.isVisible():
+            self.search_box.setFocus()
+            self.search_box.selectAll()
+            return
+        fb = getattr(self, "find_bar", None)
+        if fb is None:
+            fb = self.find_bar = FindBar(self)
+        fb.edit.setText(self.search_box.text())
+        fb.status.setText(self.search_lb.text().strip())
+        fb.place()
+        fb.show()
+        fb.raise_()
+        fb.edit.setFocus()
+        fb.edit.selectAll()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        fb = getattr(self, "find_bar", None)
+        if fb is not None and fb.isVisible():
+            if self.search_box.isVisible():      # cửa sổ đã đủ rộng: dùng lại ô tìm trên thanh công cụ
+                fb.hide()
+            else:
+                fb.place()
 
     # ---------------------------------------------------------------- mở / đóng
     def add_tab(self, model: DocModel) -> DocTab:
@@ -1334,7 +1426,7 @@ class MainWindow(QMainWindow):
 
     def wire_viewer(self, t: DocTab, v: Viewer):
         v.message.connect(self.msg)
-        v.searchChanged.connect(lambda s_: self.search_lb.setText(" " + s_) if self.tab() is t and t.viewer is v else None)
+        v.searchChanged.connect(lambda s_: self._search_status(s_) if self.tab() is t and t.viewer is v else None)
         v.pageChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
         v.zoomChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
         v.toolChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
