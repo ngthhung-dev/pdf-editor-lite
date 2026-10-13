@@ -705,50 +705,93 @@ class HoverMenus(QObject):
 
 # ------------------------------------------------------------------ cửa sổ chính
 class FindBar(QFrame):
-    """Thanh tìm nổi (khi ô tìm trên thanh công cụ bị khuất vì cửa sổ hẹp). Dùng chung nội dung với ô tìm đó."""
+    """Khung tìm nổi ở góc trên bên phải vùng tài liệu (giống trình duyệt): Ctrl+F mở, Esc đóng.
+    Cùng một vị trí, cùng một kiểu ở mọi cỡ cửa sổ."""
 
-    def __init__(self, main: "MainWindow"):
-        super().__init__(main)
+    def __init__(self, main: "MainWindow", host: QWidget):
+        super().__init__(host)
         self.main = main
+        self.host = host
         self.setObjectName("findbar")
-        self.setStyleSheet("#findbar{background:#ffffff;border:1px solid #c4c7c5;border-radius:6px;}")
+        self.setStyleSheet(
+            "#findbar{background:#ffffff;border:1px solid #d0d4d9;border-radius:8px;}"
+            "#findbar QLineEdit{border:none;background:transparent;padding:2px 0;font-size:10pt;}"
+            "#findbar QToolButton{border:none;border-radius:4px;padding:3px;}"
+            "#findbar QToolButton:hover{background:#eceff3;}"
+            "#findbar QToolButton:disabled{color:#c4c7c5;}"
+            "#findbar #fbsep{background:#e1e4e8;}")
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+        sh = QGraphicsDropShadowEffect(self)
+        sh.setBlurRadius(18)
+        sh.setOffset(0, 3)
+        sh.setColor(QColor(0, 0, 0, 55))
+        self.setGraphicsEffect(sh)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 5, 5, 5)
+        lay.setContentsMargins(10, 4, 6, 4)
         lay.setSpacing(4)
+        mag = QLabel()
+        mag.setPixmap(icon("search").pixmap(18, 18))
         self.edit = QLineEdit()
-        self.edit.setPlaceholderText("Tìm trong tài liệu…")
+        self.edit.setPlaceholderText("Tìm trong tài liệu")
         self.edit.setClearButtonEnabled(True)
-        self.edit.setFixedWidth(220)
+        self.edit.setFixedWidth(230)
         self.status = QLabel("")
-        self.status.setMinimumWidth(70)
+        self.status.setFixedWidth(104)
+        self.status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.status.setStyleSheet("color:#5f6368;")
+        sep = QFrame()
+        sep.setObjectName("fbsep")
+        sep.setFixedSize(1, 20)
+        lay.addWidget(mag)
         lay.addWidget(self.edit)
         lay.addWidget(self.status)
-        for arrow, fwd, tip in ((Qt.UpArrow, False, "Tìm ngược lại (Shift+F3)"), (Qt.DownArrow, True, "Tìm tiếp (F3)")):
+        lay.addSpacing(4)
+        lay.addWidget(sep)
+        self.btns = []
+        for arrow, fwd, tip in ((Qt.UpArrow, False, "Kết quả trước (Shift+F3, Shift+Enter)"),
+                                (Qt.DownArrow, True, "Kết quả tiếp theo (F3, Enter)")):
             b = QToolButton()
             b.setArrowType(arrow)
-            b.setAutoRaise(True)
             b.setToolTip(tip)
-            b.clicked.connect(lambda _=False, f=fwd: self.go(f))
+            b.setFixedSize(26, 26)
+            b.clicked.connect(lambda _=False, f=fwd: self.main.do_search(f))
             lay.addWidget(b)
+            self.btns.append(b)
         close = QToolButton()
         close.setText("×")
-        close.setAutoRaise(True)
+        f = close.font()
+        f.setPointSize(13)
+        close.setFont(f)
+        close.setFixedSize(26, 26)
         close.setToolTip("Đóng (Esc)")
         close.clicked.connect(self.close_bar)
         lay.addWidget(close)
-        self.edit.textEdited.connect(self.main.search_box.setText)
-        self.edit.returnPressed.connect(lambda: self.go(not (QApplication.keyboardModifiers() & Qt.ShiftModifier)))
+        self.edit.returnPressed.connect(
+            lambda: self.main.do_search(not (QApplication.keyboardModifiers() & Qt.ShiftModifier)))
+        self.edit.textChanged.connect(self._sync)
+        host.installEventFilter(self)
+        self._sync()
         self.hide()
 
-    def go(self, forward: bool):
-        self.main.search_box.setText(self.edit.text())
-        self.main.do_search(forward)
+    def _sync(self, *_):
+        has = bool(self.edit.text().strip())
+        for b in self.btns:
+            b.setEnabled(has)
+        if not has:
+            self.status.setText("")
+
+    def open(self):
+        self.place()
+        self.show()
+        self.raise_()
+        self.edit.setFocus()
+        self.edit.selectAll()
 
     def close_bar(self):
         self.hide()
         t = self.main.tab()
         if t:
+            t.viewer.search("")          # bỏ tô sáng kết quả; chữ vẫn giữ trong ô, Ctrl+F mở lại là có
             t.viewer.setFocus()
 
     def keyPressEvent(self, e):
@@ -758,10 +801,18 @@ class FindBar(QFrame):
         super().keyPressEvent(e)
 
     def place(self):
+        """Góc trên bên phải vùng xem tài liệu, ngay dưới hàng tab, chừa thanh cuộn."""
         self.adjustSize()
-        c = self.main.centralWidget()
-        top = c.geometry().top() if c is not None else 80
-        self.move(max(8, self.main.width() - self.width() - 24), top + 6)
+        h = self.host
+        top = 8
+        if isinstance(h, QTabWidget):
+            top += h.tabBar().height()
+        self.move(max(6, h.width() - self.width() - 26), top)
+
+    def eventFilter(self, obj, ev):
+        if obj is self.host and ev.type() == QEvent.Resize and self.isVisible():
+            self.place()
+        return False
 
 
 class MainWindow(QMainWindow):
@@ -931,7 +982,8 @@ class MainWindow(QMainWindow):
         A("Sao chép chữ / hình ảnh đang chọn", lambda t: t.viewer.copy_selection(), "Ctrl+C", menu=m)
         A("Lưu hình ảnh đang chọn thành file…", lambda t: t.viewer.save_image(), menu=m)
         A("Xoá hình ảnh đang chọn khỏi trang", lambda t: t.viewer.delete_image(), menu=m)
-        A("Tìm…", self.show_find, "Ctrl+F", menu=m, guard=False)
+        self.a_find = A("Tìm…", self.show_find, "Ctrl+F", "search", menu=m, guard=False,
+                        tip="Tìm chữ trong tài liệu (không phân biệt hoa thường; gõ không dấu thì tìm cả chữ có dấu)")
         A("Tìm tiếp", lambda: self.do_search(True), "F3", menu=m, guard=False)
         A("Tìm ngược lại", lambda: self.do_search(False), "Shift+F3", menu=m, guard=False)
         m.addSeparator()
@@ -1224,17 +1276,12 @@ class MainWindow(QMainWindow):
         sp = QWidget()
         sp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(sp)
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Tìm trong tài liệu…")
-        self.search_box.setFixedWidth(210)
-        self.search_box.setClearButtonEnabled(True)
-        self.search_box.returnPressed.connect(lambda: self.do_search(True))
+        tb.addAction(self.a_find)
+        self.find_bar = FindBar(self, self.tabs)
+        self.search_box = self.find_bar.edit       # ô tìm nằm trong khung tìm nổi
+        self.search_lb = self.find_bar.status
         self.search_box.textChanged.connect(lambda s: (not s) and self.do_search(True))
         self.search_box.textChanged.connect(lambda *_: self._dim_unavailable())
-        tb.addWidget(self.search_box)
-        self.search_lb = QLabel("")
-        self.search_lb.setMinimumWidth(70)
-        tb.addWidget(self.search_lb)
 
         self.addToolBarBreak()
         t2 = QToolBar("Công cụ")
@@ -1366,40 +1413,18 @@ class MainWindow(QMainWindow):
 
     def do_search(self, forward: bool):
         t = self.tab()
+        if t and self.search_box.text().strip() and not self.find_bar.isVisible():
+            self.find_bar.place()            # F3 khi khung tìm đang đóng: hiện lại khung để thấy thứ tự kết quả
+            self.find_bar.show()
+            self.find_bar.raise_()
         if t:
             self._search_status(t.viewer.search(self.search_box.text(), forward))
 
     def _search_status(self, s: str) -> None:
-        self.search_lb.setText(" " + s)
-        fb = getattr(self, "find_bar", None)
-        if fb is not None:
-            fb.status.setText(s)
+        self.search_lb.setText(s)
 
     def show_find(self):
-        """Ctrl+F: ô tìm trên thanh công cụ; cửa sổ hẹp làm ô đó bị dồn vào nút » thì hiện thanh tìm nổi ở góc trên phải."""
-        if self.search_box.isVisible():
-            self.search_box.setFocus()
-            self.search_box.selectAll()
-            return
-        fb = getattr(self, "find_bar", None)
-        if fb is None:
-            fb = self.find_bar = FindBar(self)
-        fb.edit.setText(self.search_box.text())
-        fb.status.setText(self.search_lb.text().strip())
-        fb.place()
-        fb.show()
-        fb.raise_()
-        fb.edit.setFocus()
-        fb.edit.selectAll()
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        fb = getattr(self, "find_bar", None)
-        if fb is not None and fb.isVisible():
-            if self.search_box.isVisible():      # cửa sổ đã đủ rộng: dùng lại ô tìm trên thanh công cụ
-                fb.hide()
-            else:
-                fb.place()
+        self.find_bar.open()
 
     # ---------------------------------------------------------------- mở / đóng
     def add_tab(self, model: DocModel) -> DocTab:

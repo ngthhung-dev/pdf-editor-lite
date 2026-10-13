@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
@@ -2122,3 +2123,65 @@ def export_all_images(doc, out_dir: str, base: str, min_size: int = 32, progress
         if progress:
             progress(i + 1, doc.page_count)
     return n
+
+
+# ----------------------------------------------------------------- tìm chữ
+def _fold(s: str, plain: bool) -> str:
+    """Chuẩn hoá để so khớp: không phân biệt hoa thường (cả chữ có dấu: Đ/đ, Ạ/ạ…); plain = bỏ luôn dấu."""
+    s = unicodedata.normalize("NFC", s).casefold()
+    if plain:
+        s = "".join(ch for ch in unicodedata.normalize("NFD", s) if not unicodedata.combining(ch)).replace("đ", "d")
+    return s
+
+
+def search_page(page, query: str) -> list:
+    """Tìm `query` trong trang, trả về các khung chữ nhật (mỗi dòng của một kết quả một khung).
+    Khác search_for của MuPDF (chỉ không phân biệt hoa thường với chữ không dấu): "đại việt" tìm ra "ĐẠI VIỆT".
+    Gõ không dấu ("dai viet") thì tìm cả chữ có dấu."""
+    plain = _fold(query, True) == _fold(query, False)
+    q = " ".join(_fold(query, plain).split())
+    if not q:
+        return []
+    text: list[str] = []      # từng mảnh chữ đã chuẩn hoá
+    owner: list[int] = []     # mảnh đó thuộc ký tự nào (-1: khoảng trắng chèn giữa các dòng)
+    chars: list[tuple] = []   # (khung, số dòng)
+    line_no = 0
+    for b in page.get_text("rawdict", flags=0).get("blocks", []):
+        for ln in b.get("lines", []):
+            line_no += 1
+            text.append(" ")
+            owner.append(-1)
+            for sp in ln.get("spans", []):
+                for ch in sp.get("chars", []):
+                    f = _fold(ch["c"], plain)
+                    if not f or f.isspace():
+                        f = " "
+                    chars.append((ch["bbox"], line_no))
+                    for piece in f:
+                        text.append(piece)
+                        owner.append(len(chars) - 1)
+    # gộp khoảng trắng liên tiếp thành một
+    flat, own = [], []
+    for c, o in zip(text, owner):
+        if c == " " and flat and flat[-1] == " ":
+            continue
+        flat.append(c)
+        own.append(o)
+    hay = "".join(flat)
+    out, start = [], 0
+    while True:
+        k = hay.find(q, start)
+        if k < 0:
+            break
+        start = k + 1
+        groups: dict[int, pymupdf.Rect] = {}
+        for o in own[k:k + len(q)]:
+            if o < 0:
+                continue
+            bb, ln = chars[o]
+            r = pymupdf.Rect(bb)
+            if r.is_empty:
+                continue
+            groups[ln] = groups[ln] | r if ln in groups else r
+        out += [groups[g] for g in sorted(groups)]
+    return out

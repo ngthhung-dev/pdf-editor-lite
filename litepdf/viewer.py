@@ -1498,7 +1498,7 @@ class Viewer(QGraphicsView):
             i = self._scan[self._scan_pos]
             self._scan_pos += 1
             try:
-                rs = doc[i].search_for(self.query, quads=False)
+                rs = tools.search_page(doc[i], self.query)
             except Exception:
                 rs = []
             if rs:
