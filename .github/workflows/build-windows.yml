@@ -184,7 +184,7 @@ jobs:
       - name: Don nhanh thu nghiem (neu con)
         continue-on-error: true
         run: |
-          for b in mac-test mac-test-logs-arm64 mac-test-logs-intel; do
+          for b in mac-test mac-test-logs-arm64 mac-test-logs-intel font-test font-test-logs; do
             git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" --delete "$b" || true
           done
         working-directory: logs
