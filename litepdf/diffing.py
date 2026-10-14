@@ -11,7 +11,8 @@ def page_words(page) -> list[tuple[str, tuple]]:
     """Các từ của một trang theo thứ tự đọc: [(từ, (x0, y0, x1, y1)), ...] (toạ độ trang chưa xoay)."""
     # xếp theo vị trí trên trang (trên xuống, trái sang phải) chứ không theo thứ tự ghi trong file: chữ vừa sửa thường
     # được ghi ở cuối nội dung trang, xếp theo vị trí thì nó mới nằm đúng chỗ cũ khi đem so
-    ws = page.get_text("words", sort=True)
+    from .tools import page_words as _pw
+    ws = _pw(page, sort=True)
     return [(unicodedata.normalize("NFC", w[4]), (w[0], w[1], w[2], w[3])) for w in ws if w[4].strip()]
 
 

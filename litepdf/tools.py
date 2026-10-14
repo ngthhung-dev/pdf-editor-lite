@@ -551,7 +551,7 @@ def pdf_to_images(doc, out_dir, base, fmt="png", dpi=150, pages=None, progress=N
 def pdf_to_text(doc, out: str) -> None:
     with open(out, "w", encoding="utf-8") as f:
         for i, page in enumerate(doc):
-            f.write(page.get_text("text", sort=True))
+            f.write(page_text(page, sort=True))
             f.write(f"\n\n----- Trang {i + 1} -----\n\n")
 
 
@@ -623,7 +623,7 @@ def _num(v):
 
 
 def _lines_as_rows(page) -> list[list[str]]:
-    words = page.get_text("words", sort=True)
+    words = page_words(page, sort=True)
     rows: list[list] = []
     for w in words:
         if rows and abs(rows[-1][0] - w[3]) < 3:
@@ -829,8 +829,159 @@ def _rgb(c: int) -> tuple[float, float, float]:
     return ((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255
 
 
+# ------------------------------------------------- chữ của phông thiếu bảng mã (ToUnicode)
+# Nhiều file PDF tiếng Việt (xuất từ phần mềm cũ, cổng dịch vụ công…) nhúng phông TrueType kiểu Identity-H mà không kèm
+# bảng mã chữ: trên trang chữ vẫn hiện đúng, nhưng chữ đọc ra là số thứ tự hình chữ ("NLQK" thay cho "kinh"). Bảng mã
+# riêng (cmap) của phông nhúng thì vẫn còn: tra ngược số hình chữ -> chữ thật.
+def _glyph_map(doc, xref: int) -> dict | None:
+    cache = doc.__dict__.setdefault("_lp_glyph_maps", {})
+    if xref in cache:
+        return cache[xref]
+    m = None
+    try:
+        import io
+        from fontTools.agl import toUnicode
+        from fontTools.ttLib import TTFont
+        buf = doc.extract_font(xref)[3]
+        if buf:
+            f = TTFont(io.BytesIO(buf), lazy=True)
+            order = f.getGlyphOrder()
+            m = {}
+            for u, g in (f.getBestCmap() or {}).items():
+                try:
+                    gid = f.getGlyphID(g)
+                except Exception:
+                    continue
+                if gid not in m or chr(u).isprintable() and not chr(m[gid]).isprintable():
+                    m[gid] = u
+            for gid, name in enumerate(order):     # hình chữ không có trong bảng mã: đoán theo tên (uni1EA1, aacute…)
+                if gid not in m and name and not name.startswith((".", "glyph")):
+                    t = toUnicode(name)
+                    if len(t) == 1:
+                        m[gid] = ord(t)
+            m = {k: chr(v) for k, v in m.items()} or None
+    except Exception:
+        m = None
+    cache[xref] = m
+    return m
+
+
+def _broken_fonts(page) -> dict:
+    """{tên phông như trong span: bảng số hình chữ -> chữ} cho các phông thiếu bảng mã của trang."""
+    doc = page.parent
+    out: dict = {}
+    try:
+        fonts = page.get_fonts()
+    except Exception:
+        return out
+    for xref, _ext, typ, base, _name, enc in fonts:
+        if typ != "Type0" or not str(enc).startswith("Identity"):
+            continue
+        try:
+            if doc.xref_get_key(xref, "ToUnicode")[0] != "null":
+                continue
+        except Exception:
+            continue
+        m = _glyph_map(doc, xref)
+        if m:
+            out.setdefault(base.split("+", 1)[-1], m)
+    return out
+
+
+def _fix_spans(page, d: dict) -> dict:
+    """Sửa chữ đọc sai của các phông thiếu bảng mã ngay trong kết quả get_text("dict"/"rawdict")."""
+    maps = _broken_fonts(page)
+    if not maps:
+        return d
+    spans = [s for b in d.get("blocks", []) for ln in b.get("lines", []) for s in ln.get("spans", [])]
+    # chỉ sửa phông thật sự đọc ra chữ sai: có ký tự điều khiển (khoảng trắng bị đọc thành \x03…)
+    bad = set()
+    for s in spans:
+        txt = s.get("text") if "text" in s else "".join(c["c"] for c in s.get("chars", []))
+        if s["font"] in maps and any(ord(c) < 32 and c not in "\t\n\r" for c in txt):
+            bad.add(s["font"])
+    import unicodedata as _ud
+    for b in d.get("blocks", []):
+        for ln in b.get("lines", []):
+            # Số hình chữ trùng với mã của một dấu kết hợp (U+0300…): thư viện đọc nó như dấu (rộng 0) rồi chèn thêm một
+            # dấu cách giả đúng bằng bề rộng của chữ ("lầ n"). Gặp vậy thì bỏ dấu cách giả, trả bề rộng lại cho chữ.
+            hang = None          # (span, ký tự) vừa đọc ra từ một mã trùng dấu kết hợp
+            for s in ln.get("spans", []):
+                m = maps.get(s["font"]) if s["font"] in bad else None
+                if "chars" in s:
+                    keep = []
+                    for c in s["chars"]:
+                        code = c["c"]
+                        if hang is not None and code == " ":
+                            hang["bbox"] = tuple(pymupdf.Rect(hang["bbox"]) | pymupdf.Rect(c["bbox"]))
+                            hang = None
+                            continue
+                        hang = None
+                        if m:
+                            c["c"] = m.get(ord(code), code)
+                            if c["c"] != code and _ud.category(code) in ("Mn", "Me"):
+                                hang = c
+                        keep.append(c)
+                    s["chars"] = keep
+                if "text" in s:
+                    out = []
+                    for code in s["text"]:
+                        if hang is not None and code == " ":
+                            if hang is not s and not out:      # dấu cách giả đứng riêng một mẩu: trả bề rộng cho mẩu trước
+                                hang["bbox"] = tuple(pymupdf.Rect(hang["bbox"]) | pymupdf.Rect(s["bbox"]))
+                            hang = None
+                            continue
+                        hang = None
+                        ch = m.get(ord(code), code) if m else code
+                        if m and ch != code and _ud.category(code) in ("Mn", "Me"):
+                            hang = s
+                        out.append(ch)
+                    s["text"] = "".join(out)
+    return d
+
+
 def text_dict(page) -> dict:
-    return page.get_text("dict", flags=pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES)
+    return _fix_spans(page, page.get_text("dict", flags=pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES))
+
+
+def page_words(page, sort: bool = False) -> list:
+    """Như page.get_text("words") nhưng đọc đúng chữ của phông thiếu bảng mã."""
+    if not _broken_fonts(page):
+        return page.get_text("words", sort=sort)
+    d = _fix_spans(page, page.get_text("rawdict", flags=pymupdf.TEXT_USE_GID_FOR_UNKNOWN_UNICODE))
+    words = []
+    for bi, b in enumerate(d.get("blocks", [])):
+        for li, ln in enumerate(b.get("lines", [])):
+            cur, box, wn = "", None, 0
+            for s in ln.get("spans", []):
+                for c in s.get("chars", []):
+                    if c["c"].isspace():
+                        if cur:
+                            words.append((box.x0, box.y0, box.x1, box.y1, cur, bi, li, wn))
+                            wn += 1
+                        cur, box = "", None
+                        continue
+                    r = pymupdf.Rect(c["bbox"])
+                    cur += c["c"]
+                    box = r if box is None else box | r
+            if cur:
+                words.append((box.x0, box.y0, box.x1, box.y1, cur, bi, li, wn))
+    if sort:
+        words.sort(key=lambda w: (round(w[3], 1), w[0]))
+    return words
+
+
+def page_text(page, sort: bool = False) -> str:
+    """Như page.get_text("text") nhưng đọc đúng chữ của phông thiếu bảng mã."""
+    if not _broken_fonts(page):
+        return page.get_text("text", sort=sort)
+    d = text_dict(page)
+    out = []
+    for b in d.get("blocks", []):
+        for ln in b.get("lines", []):
+            out.append("".join(s["text"] for s in ln.get("spans", [])))
+        out.append("")
+    return "\n".join(out)
 
 
 def text_runs(d: dict) -> list[dict]:
@@ -2189,7 +2340,7 @@ def search_page(page, query: str) -> list:
     owner: list[int] = []     # mảnh đó thuộc ký tự nào (-1: khoảng trắng chèn giữa các dòng)
     chars: list[tuple] = []   # (khung, số dòng)
     line_no = 0
-    for b in page.get_text("rawdict", flags=0).get("blocks", []):
+    for b in _fix_spans(page, page.get_text("rawdict", flags=pymupdf.TEXT_USE_GID_FOR_UNKNOWN_UNICODE)).get("blocks", []):
         for ln in b.get("lines", []):
             line_no += 1
             text.append(" ")

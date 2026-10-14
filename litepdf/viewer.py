@@ -816,7 +816,7 @@ class Viewer(QGraphicsView):
     # ------------------------------------------------------------ chọn chữ
     def _words(self, i: int) -> list:
         if i not in self.words:
-            self.words[i] = self.model.doc[i].get_text("words")
+            self.words[i] = tools.page_words(self.model.doc[i])
         return self.words[i]
 
     def _nearest_word(self, ws: list, pt: pymupdf.Point) -> int:
