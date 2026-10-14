@@ -16,7 +16,7 @@ from PySide6.QtGui import (QColor, QDesktopServices, QGuiApplication, QImage, QP
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QInputDialog, QMenu, QMessageBox, QToolTip
 
 from . import tools
-from .icons import icon_for
+from .icons import icon, icon_for
 
 GAP = 14.0
 MARGIN = 16.0
@@ -394,6 +394,7 @@ class Viewer(QGraphicsView):
         self.notes: dict[int, list] = {}     # ghi chú có nội dung trên từng trang (để hiện khi rê chuột)
         self._note_tip = None
         self.sel_image = None      # (trang, thông tin ảnh) khi đang chọn một hình ảnh gốc
+        self.img_drag = None       # đang dời / co giãn / xoay ảnh đang chọn
         self.dicts: dict[int, dict] = {}
         self.tool = "hand"
         self.payload = None
@@ -721,11 +722,47 @@ class Viewer(QGraphicsView):
             for r in self.sel_rects:
                 p.fillRect(self.to_scene(self.sel_page, r), QColor(40, 110, 255, 80))
         # hình ảnh đang chọn
-        if self.sel_image and self.sel_image[0] < len(self.rects):
-            sr = self.to_scene(self.sel_image[0], self.sel_image[1]["bbox"])
+        if self.sel_image and self.sel_image[0] < len(self.rects) and self.img_drag is None:
+            si, sinfo = self.sel_image
+            sr = self.to_scene(si, sinfo["bbox"])
             p.setPen(QPen(QColor("#1a73e8"), 2 * px))
-            p.setBrush(QColor(26, 115, 232, 45))
+            p.setBrush(QColor(26, 115, 232, 30))
             p.drawRect(sr)
+            if self.tool == "select" and not self.rot[si][0]:
+                h = 4.5 * px
+                r = pymupdf.Rect(sinfo["bbox"])
+                p.setPen(QPen(QColor("#1a73e8"), 1.2 * px))
+                p.setBrush(Qt.white)
+                for c in (r.tl, r.tr, r.bl, r.br):          # tay nắm đổi cỡ ở 4 góc
+                    q = self._spt(si, c)
+                    p.drawRect(QRectF(q.x() - h, q.y() - h, 2 * h, 2 * h))
+                if not sinfo.get("annot"):                   # tay nắm xoay phía trên
+                    top = self._spt(si, pymupdf.Point((r.x0 + r.x1) / 2, r.y0))
+                    rh = self._img_rot_handle(si, r)
+                    p.drawLine(top, rh)
+                    p.setBrush(QColor("#1a73e8"))
+                    p.drawEllipse(rh, h * 1.15, h * 1.15)
+        if self.img_drag is not None:
+            d = self.img_drag
+            i0, r = d["i"], pymupdf.Rect(d["info"]["bbox"])
+            p.fillRect(self.to_scene(i0, r), QColor(255, 255, 255, 170))       # chỗ cũ mờ đi
+            qd = r.quad * d["A"]
+            poly = QPolygonF([self._spt(i0, qd.ul), self._spt(i0, qd.ur), self._spt(i0, qd.lr), self._spt(i0, qd.ll)])
+            pm = d.get("pix")
+            if pm is not None and not pm.isNull():
+                from PySide6.QtGui import QTransform
+                src = QPolygonF([QPointF(0, 0), QPointF(pm.width(), 0), QPointF(pm.width(), pm.height()),
+                                 QPointF(0, pm.height())])
+                t = QTransform()
+                if QTransform.quadToQuad(src, poly, t):
+                    p.save()
+                    p.setTransform(t, True)
+                    p.setOpacity(0.75)
+                    p.drawPixmap(0, 0, pm)
+                    p.restore()
+            p.setPen(QPen(QColor("#1a73e8"), 1.4 * px, Qt.DashLine))
+            p.setBrush(Qt.NoBrush)
+            p.drawPolygon(poly)
         # chữ gốc dưới con trỏ (công cụ sửa chữ)
         if self.tool == "edittext" and self.hover_run:
             pg, run = self.hover_run
@@ -861,7 +898,8 @@ class Viewer(QGraphicsView):
         self.sel_rects, self.sel_text = [], ""
         self.sel_image = (i, info)
         size = f"{info['width']} × {info['height']} px" if info.get("width") else ""
-        self.message.emit(f"Đã chọn hình ảnh {size}. Ctrl+C để sao chép, chuột phải để lưu thành file hoặc xoá.")
+        self.message.emit(f"Đã chọn hình ảnh {size}. Kéo để dời, kéo góc để đổi cỡ (Shift: tự do), kéo nút tròn phía trên "
+                          "để xoay (Shift: từng nấc 15°), phím mũi tên để nhích; chuột phải để xoay 90°, lưu, xoá.")
         self.viewport().update()
         self.selectionChanged.emit()
 
@@ -904,6 +942,133 @@ class Viewer(QGraphicsView):
             tools.delete_image(self.model.doc[i], info)
         self.message.emit("Đã xoá hình ảnh khỏi trang (Ctrl+Z để lấy lại).")
         return True
+
+    # ------------------------------------------------------------ dời / co giãn / xoay hình ảnh
+    def _spt(self, i: int, pt) -> QPointF:
+        """Điểm trên trang -> toạ độ cảnh."""
+        pt = pymupdf.Point(pt)
+        return self.to_scene(i, pymupdf.Rect(pt, pt)).topLeft()
+
+    def _img_hit(self, sp: QPointF):
+        """Chỗ bấm so với ảnh đang chọn: 'rotate' | ('scale', số góc) | 'move' | None."""
+        if not self.sel_image:
+            return None
+        i, info = self.sel_image
+        if i >= len(self.rects):
+            return None
+        h = 7 / max(0.01, self.transform().m11())
+        r = pymupdf.Rect(info["bbox"])
+        if not info.get("annot"):
+            rot = self._img_rot_handle(i, r)
+            if abs(sp.x() - rot.x()) <= h * 1.3 and abs(sp.y() - rot.y()) <= h * 1.3:
+                return "rotate"
+        for k, c in enumerate((r.tl, r.tr, r.bl, r.br)):
+            q = self._spt(i, c)
+            if abs(sp.x() - q.x()) <= h and abs(sp.y() - q.y()) <= h:
+                return ("scale", k)
+        if self.to_scene(i, r).contains(sp):
+            return "move"
+        return None
+
+    def _img_rot_handle(self, i: int, r) -> QPointF:
+        top = self._spt(i, pymupdf.Point((r.x0 + r.x1) / 2, r.y0))
+        return QPointF(top.x(), top.y() - 26 / max(0.01, self.transform().m11()))
+
+    def _img_matrix(self, pt, shift: bool):
+        d = self.img_drag
+        mode, start = d["mode"], d["start"]
+        T = lambda x, y: pymupdf.Matrix(1, 0, 0, 1, x, y)
+        if mode == "move":
+            return T(pt.x - start.x, pt.y - start.y)
+        if mode == "rotate":
+            c = d["center"]
+            a0 = math.degrees(math.atan2(start.y - c.y, start.x - c.x))
+            a1 = math.degrees(math.atan2(pt.y - c.y, pt.x - c.x))
+            ang = a1 - a0
+            if shift:
+                ang = round(ang / 15) * 15
+            d["angle"] = ang
+            return T(-c.x, -c.y) * pymupdf.Matrix(ang) * T(c.x, c.y)
+        anchor, corner = d["anchor"], d["corner"]
+        v0x, v0y = corner.x - anchor.x, corner.y - anchor.y
+        sx = (pt.x - anchor.x) / v0x if abs(v0x) > 0.01 else 1
+        sy = (pt.y - anchor.y) / v0y if abs(v0y) > 0.01 else 1
+        if shift:          # giữ Shift: co giãn tự do từng chiều
+            sx, sy = max(0.05, sx), max(0.05, sy)
+        else:              # mặc định giữ đúng tỉ lệ ảnh
+            sx = sy = max(0.05, (sx + sy) / 2)
+        return T(-anchor.x, -anchor.y) * pymupdf.Matrix(sx, sy) * T(anchor.x, anchor.y)
+
+    def _img_drag_start(self, i: int, sp: QPointF, hit) -> None:
+        info = self.sel_image[1]
+        r = pymupdf.Rect(info["bbox"])
+        corners = (r.tl, r.tr, r.bl, r.br)
+        d = {"i": i, "info": info, "start": self.to_page(i, sp, clamp=False), "A": pymupdf.Matrix(1, 0, 0, 1, 0, 0),
+             "center": (r.tl + r.br) / 2}
+        if isinstance(hit, tuple):
+            d["mode"], d["corner"], d["anchor"] = "scale", corners[hit[1]], corners[3 - hit[1]]
+        else:
+            d["mode"] = hit
+        try:            # ảnh đúng như đang hiện trên trang (vẽ riêng vùng của ảnh), để kéo tới đâu thấy ảnh tới đó
+            z = max(0.5, min(3.0, self.to_scene(i, r).width() * self.transform().m11() / max(1.0, r.width)))
+            pm = self.model.doc[i].get_pixmap(matrix=pymupdf.Matrix(z, z), clip=r, alpha=False)
+            img = QImage(pm.samples, pm.width, pm.height, pm.stride, QImage.Format_RGB888).copy()
+            from PySide6.QtGui import QPixmap
+            d["pix"] = QPixmap.fromImage(img)
+        except Exception:
+            d["pix"] = None
+        self.img_drag = d
+
+    def _commit_image(self, i: int, info: dict, A) -> None:
+        r = pymupdf.Rect(info["bbox"])
+        new = (r.quad * A).rect
+        with self.model.edit(i):
+            page = self.model.doc[i]
+            if info.get("annot"):          # ảnh chèn dạng con dấu / chữ ký: đổi khung của ghi chú
+                for an in list(page.annots() or []):
+                    if an.type[1] == "Stamp" and (pymupdf.Rect(an.rect) & r).get_area() > 0.5 * r.get_area():
+                        an.set_rect(new)
+                        an.update()
+                        break
+                else:
+                    raise tools.ImageEditError("Hình này thuộc khung chữ ký số hoặc ô biểu mẫu nên không sửa riêng được.")
+            else:
+                tools.transform_image(page, info, A)
+        # chọn lại đúng ảnh đó ở chỗ mới
+        self.imgs.pop(i, None)
+        best = None
+        for d in self._images(i):
+            if d.get("xref") == info.get("xref") or info.get("annot"):
+                dist = abs(d["bbox"].x0 - new.x0) + abs(d["bbox"].y0 - new.y0) + abs(d["bbox"].x1 - new.x1) \
+                    + abs(d["bbox"].y1 - new.y1)
+                if best is None or dist < best[0]:
+                    best = (dist, d)
+        if best:
+            self.sel_image = (i, best[1])
+            self.selectionChanged.emit()
+        else:
+            self.sel_image = None
+
+    def rotate_image(self, deg: float) -> None:
+        """Xoay ảnh đang chọn quanh tâm của nó (độ, chiều kim đồng hồ)."""
+        if not self.sel_image:
+            return
+        i, info = self.sel_image
+        if info.get("annot"):
+            self.message.emit("Ảnh chèn dạng con dấu / chữ ký chỉ dời và đổi cỡ được, chưa xoay được.")
+            return
+        r = pymupdf.Rect(info["bbox"])
+        c = (r.tl + r.br) / 2
+        A = pymupdf.Matrix(1, 0, 0, 1, -c.x, -c.y) * pymupdf.Matrix(deg) * pymupdf.Matrix(1, 0, 0, 1, c.x, c.y)
+        self._commit_image(i, info, A)
+        self.message.emit(f"Đã xoay hình ảnh {abs(deg):g}° (Ctrl+Z để hoàn tác).")
+        self.viewport().update()
+
+    def nudge_image(self, dx: float, dy: float) -> None:
+        if self.sel_image:
+            i, info = self.sel_image
+            self._commit_image(i, info, pymupdf.Matrix(1, 0, 0, 1, dx, dy))
+            self.viewport().update()
 
     def clear_selection(self):
         self.sel_image = None
@@ -1108,6 +1273,11 @@ class Viewer(QGraphicsView):
             self.pan = (e.position(), self.horizontalScrollBar().value(), self.verticalScrollBar().value(), i, sp)
             self.viewport().setCursor(Qt.ClosedHandCursor)
             return
+        if self.tool == "select" and self.sel_image and not self.rot[self.sel_image[0]][0]:
+            hit = self._img_hit(sp)
+            if hit:                      # nắm vào ảnh đang chọn: dời / co giãn (góc) / xoay (nút tròn phía trên)
+                self._img_drag_start(self.sel_image[0], sp, hit)
+                return
         if i is None:
             return
         self.press, self.press_page = sp, i
@@ -1137,6 +1307,23 @@ class Viewer(QGraphicsView):
         self.last_scroll = time.perf_counter()
         sp = self.mapToScene(e.position().toPoint())
         self.cur = sp
+        if self.img_drag is not None:
+            d = self.img_drag
+            d["A"] = self._img_matrix(self.to_page(d["i"], sp, clamp=False), bool(e.modifiers() & Qt.ShiftModifier))
+            if d["mode"] == "rotate":
+                self.message.emit(f"Xoay {d.get('angle', 0):.0f}° (giữ Shift để xoay từng nấc 15°)")
+            self.viewport().update()
+            return
+        if self.tool == "select" and self.press is None and self.sel_image:
+            hit = self._img_hit(sp)
+            cur = Qt.IBeamCursor
+            if hit == "move":
+                cur = Qt.SizeAllCursor
+            elif hit == "rotate":
+                cur = Qt.PointingHandCursor
+            elif isinstance(hit, tuple):
+                cur = Qt.SizeFDiagCursor if hit[1] in (0, 3) else Qt.SizeBDiagCursor
+            self.viewport().setCursor(cur)
         if self.pan:
             d = e.position() - self.pan[0]
             self.horizontalScrollBar().setValue(int(self.pan[1] - d.x()))
@@ -1195,6 +1382,19 @@ class Viewer(QGraphicsView):
             self.viewport().update()
 
     def _release(self, e, sp: QPointF):
+        if self.img_drag is not None:
+            d, self.img_drag = self.img_drag, None
+            A = d["A"]
+            moved = abs(A.a - 1) + abs(A.b) + abs(A.c) + abs(A.d - 1) > 1e-3 or abs(A.e) + abs(A.f) > 0.5
+            if moved:
+                try:
+                    self._commit_image(d["i"], d["info"], A)
+                    what = {"move": "Đã dời", "scale": "Đã đổi cỡ", "rotate": "Đã xoay"}[d["mode"]]
+                    self.message.emit(f"{what} hình ảnh (Ctrl+Z để hoàn tác).")
+                except tools.ImageEditError as ex:
+                    self.message.emit(str(ex))
+                    QMessageBox.information(self, "PDF Editor Lite", str(ex))
+            return
         if self.pan:
             start, _h, _v, i, sp0 = self.pan
             self.pan = None
@@ -1442,6 +1642,11 @@ class Viewer(QGraphicsView):
                 m.addAction(icon_for("Sao chép hình ảnh"), "Sao chép hình ảnh", lambda: self._safe(self.copy_image))
                 m.addAction(icon_for("Lưu hình ảnh thành file…"), "Lưu hình ảnh thành file…", lambda: self._safe(self.save_image))
                 m.addAction(icon_for("Xoá hình ảnh khỏi trang"), "Xoá hình ảnh khỏi trang", lambda: self._safe(self.delete_image))
+                if not self.sel_image[1].get("annot"):
+                    m.addSeparator()
+                    m.addAction(icon("rotr"), "Xoay phải 90°", lambda: self._safe(self.rotate_image, 90))
+                    m.addAction(icon("rotl"), "Xoay trái 90°", lambda: self._safe(self.rotate_image, -90))
+                    m.addAction(icon("rotr"), "Xoay 180°", lambda: self._safe(self.rotate_image, 180))
                 m.addSeparator()
         if i is not None:
             pt = self.to_page(i, sp)
@@ -1471,6 +1676,13 @@ class Viewer(QGraphicsView):
             self.annot = None
             if self.tool != "hand":
                 self.set_tool("hand")
+            return
+        if self.sel_image and not self.annot and k in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) \
+                and self.tool == "select":           # phím mũi tên: nhích ảnh đang chọn 1 điểm (Shift: 10 điểm)
+            st = 10.0 if e.modifiers() & Qt.ShiftModifier else 1.0
+            dx = {Qt.Key_Left: -st, Qt.Key_Right: st}.get(k, 0.0)
+            dy = {Qt.Key_Up: -st, Qt.Key_Down: st}.get(k, 0.0)
+            self._safe(self.nudge_image, dx, dy)
             return
         if k in (Qt.Key_Delete, Qt.Key_Backspace) and self.sel_image and not self.annot:
             self._safe(self.delete_image)

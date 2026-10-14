@@ -2379,3 +2379,72 @@ def search_page(page, query: str) -> list:
             groups[ln] = groups[ln] | r if ln in groups else r
         out += [groups[g] for g in sorted(groups)]
     return out
+
+
+# ----------------------------------------------------------------- dời / co giãn / xoay hình ảnh gốc
+class ImageEditError(Exception):
+    pass
+
+
+def _fmt(v: float) -> str:
+    s = f"{v:.5f}".rstrip("0").rstrip(".")
+    return "0" if s in ("-0", "") else s
+
+
+def transform_image(page, info: dict, a_m) -> None:
+    """Đặt lại một hình ảnh gốc của trang theo phép biến đổi `a_m` (toạ độ trang: dời, co giãn, xoay quanh một điểm).
+    Chỉ sửa đúng lệnh vẽ ảnh đó trong nội dung trang (giữ nguyên thứ tự lớp: chữ đè lên ảnh vẫn đè lên), ảnh gốc giữ
+    nguyên chất lượng, không phải nhúng lại."""
+    doc = page.parent
+    xref = info.get("xref", 0)
+    if not xref or info.get("annot"):
+        raise ImageEditError("Không tìm thấy ảnh trong nội dung trang.")
+    infos = [d for d in page.get_image_info(xrefs=True) if d.get("xref") == xref]
+    target = pymupdf.Rect(info["bbox"])
+    k = min(range(len(infos)), key=lambda j: abs(pymupdf.Rect(infos[j]["bbox"]).x0 - target.x0)
+            + abs(pymupdf.Rect(infos[j]["bbox"]).y0 - target.y0)
+            + abs(pymupdf.Rect(infos[j]["bbox"]).x1 - target.x1)
+            + abs(pymupdf.Rect(infos[j]["bbox"]).y1 - target.y1), default=None)
+    if k is None:
+        raise ImageEditError("Không tìm thấy ảnh trong nội dung trang.")
+    by_ref: dict[int, set] = {}      # nơi khai báo ảnh: 0 = nội dung trang, số khác = nhóm nội dung (form) chứa ảnh
+    for it in page.get_images(full=True):
+        if it[0] == xref:
+            by_ref.setdefault(it[9], set()).add(it[7])
+
+    def find(data: bytes, names: set):
+        pat = re.compile(rb"/(" + b"|".join(re.escape(n.encode("latin-1")) for n in sorted(names, key=len, reverse=True))
+                         + rb")\s+Do\b")
+        return [(m.start(), m.end(), m.group(1)) for m in pat.finditer(data)]
+
+    hits = []        # (xref luồng, vị trí đầu, vị trí cuối, tên)
+    for sx in page.get_contents():
+        if 0 in by_ref:
+            hits += [(sx,) + h for h in find(doc.xref_stream(sx) or b"", by_ref[0])]
+    form_hits = []
+    for ref, names in by_ref.items():
+        if ref:
+            form_hits += [(ref,) + h for h in find(doc.xref_stream(ref) or b"", names)]
+    if form_hits:
+        # ảnh nằm trong nhóm nội dung (file xuất từ Word, trình duyệt…): sửa được khi trên trang chỉ có đúng một chỗ vẽ ảnh đó
+        if len(infos) == 1 and len(hits) + len(form_hits) == 1:
+            hits = form_hits
+        else:
+            raise ImageEditError("Ảnh này được vẽ nhiều lần qua một nhóm nội dung dùng chung nên chưa sửa riêng được.")
+    if len(hits) != len(infos):
+        raise ImageEditError("Ảnh này được vẽ qua một nhóm nội dung phức tạp nên chưa sửa riêng được.")
+    T = pymupdf.Matrix(infos[k]["transform"])
+    F = pymupdf.Matrix(1, 0, 0, -1, 0, 1)            # ảnh trong MuPDF tính từ góc trên, trong PDF tính từ góc dưới
+    try:
+        X = F * T * pymupdf.Matrix(a_m) * ~T * F
+    except Exception:
+        raise ImageEditError("Ảnh quá mỏng để biến đổi.")
+    sx, a, b, name = hits[k]
+    data = doc.xref_stream(sx)
+    rep = b"q " + " ".join(_fmt(v) for v in (X.a, X.b, X.c, X.d, X.e, X.f)).encode() + b" cm /" + name + b" Do Q"
+    doc.update_stream(sx, data[:a] + rep + data[b:])
+
+
+def image_quad(info: dict, a_m) -> pymupdf.Quad:
+    """Bốn góc của ảnh sau phép biến đổi (để vẽ khung xem trước)."""
+    return pymupdf.Rect(info["bbox"]).quad * pymupdf.Matrix(a_m)
