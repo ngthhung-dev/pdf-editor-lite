@@ -840,11 +840,12 @@ def text_runs(d: dict) -> list[dict]:
     if "_runs" in d:
         return d["_runs"]
     pieces = []
-    for block in d.get("blocks", []):
+    for bi, block in enumerate(d.get("blocks", [])):
         for line in block.get("lines", []):
             dr = tuple(line.get("dir", (1, 0)))
             for s in line.get("spans", []):
                 if s["text"].strip():
+                    s["_blk"] = bi
                     pieces.append((s, dr))
     horiz = [(s, dr) for s, dr in pieces if abs(dr[1]) < 0.01 and dr[0] > 0]
     other = [(s, dr) for s, dr in pieces if not (abs(dr[1]) < 0.01 and dr[0] > 0)]
@@ -860,6 +861,7 @@ def text_runs(d: dict) -> list[dict]:
     def start(s, dr):
         runs.append({"bbox": pymupdf.Rect(s["bbox"]), "text": s["text"], "origin": pymupdf.Point(s["origin"]),
                      "size": s["size"], "color": _rgb(s["color"]), "font": s["font"], "flags": s["flags"], "dir": dr,
+                     "block": s.get("_blk"),
                      "_parts": {style_of(s): [len(s["text"]), s]},
                      "segs": [[s["text"], bool(s["flags"] & 16), bool(s["flags"] & 2), _rgb(s["color"])]]})
     for s, dr in horiz:
@@ -1003,6 +1005,47 @@ def replace_text_run(page, run: dict, new_text: str, size: float | None = None, 
     else:
         tw.write_text(page, overlay=True, morph=(at, pymupdf.Matrix(dx, -dy, dy, dx, 0, 0)))
     return font.name
+
+
+def paragraph_runs(page, run: dict, d: dict | None = None) -> list[dict]:
+    """Các dòng cùng đoạn văn với `run`: cùng khối chữ của trang, hoặc các dòng liền nhau, thẳng lề trái, cỡ chữ gần bằng."""
+    if d is None:
+        d = text_dict(page)
+    runs = [r for r in text_runs(d) if r.get("dir", (1, 0)) == run.get("dir", (1, 0))]
+    same = [r for r in runs if run.get("block") is not None and r.get("block") == run.get("block")]
+    if len(same) > 1:
+        return sorted(same, key=lambda r: r["origin"].y)
+    # file ghi mỗi dòng thành một khối riêng: tự nhận đoạn văn theo lề trái và khoảng cách dòng
+    lines = sorted(runs, key=lambda r: r["origin"].y)
+    k = next((j for j, r in enumerate(lines) if r is run or r["bbox"] == run["bbox"]), None)
+    if k is None:
+        return [run]
+    para = [lines[k]]
+    for step in (-1, 1):
+        j, prev = k + step, lines[k]
+        while 0 <= j < len(lines):
+            r = lines[j]
+            gap = abs(r["origin"].y - prev["origin"].y)
+            if not (0.9 <= r["size"] / max(0.1, prev["size"]) <= 1.12 and abs(r["bbox"].x0 - prev["bbox"].x0) < 1.5 * prev["size"]
+                    and 0.8 * prev["size"] <= gap <= 2.0 * prev["size"]):
+                break
+            para.append(r)
+            prev, j = r, j + step
+    return sorted(para, key=lambda r: r["origin"].y)
+
+
+def move_text_runs(page, runs: list[dict], dx: float, dy: float) -> str:
+    """Dời các dòng chữ gốc đi (dx, dy) điểm: xoá chữ ở chỗ cũ rồi viết lại đúng kiểu chữ (đậm, nghiêng, màu) ở chỗ mới."""
+    plans = []
+    for r in runs:
+        pieces = rich_lines(r, list(r["segs"]), r["size"], None)[0]
+        plans.append((r, pieces))
+    for r, _ in plans:
+        replace_text_run(page, r, "")
+    used = ""
+    for r, pieces in plans:
+        used = write_pieces(page, r["origin"] + (dx, dy), pieces, r["size"]) or used
+    return used
 
 
 class NoRoom(Exception):

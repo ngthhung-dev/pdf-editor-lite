@@ -793,7 +793,8 @@ class Viewer(QGraphicsView):
             "highlight": "Kéo chuột qua chữ để tô sáng. Esc để thôi.",
             "underline": "Kéo chuột qua chữ để gạch chân. Esc để thôi.",
             "strike": "Kéo chuột qua chữ để gạch ngang. Esc để thôi.",
-            "edittext": "Bấm vào một dòng chữ để sửa; kéo khung quanh nhiều dòng để sửa cả vùng; giữ Ctrl và kéo để dời dòng chữ.",
+            "edittext": "Bấm vào một dòng chữ để sửa; nắm dòng chữ kéo đi để dời (giữ Ctrl: dời cả đoạn văn); "
+                        "kéo khung từ chỗ trống quanh nhiều dòng để sửa cả vùng.",
             "text": "Bấm vào chỗ muốn thêm chữ.",
             "note": "Bấm vào chỗ muốn đặt ghi chú.",
             "image": "Kéo một khung tại chỗ muốn đặt ảnh (hoặc bấm một lần để đặt cỡ mặc định).",
@@ -1113,9 +1114,18 @@ class Viewer(QGraphicsView):
         if self.tool == "ink":
             self.ink = [sp]
         elif self.tool == "edittext":
-            # giữ Ctrl và kéo = dời dòng chữ; kéo thường = quét khung quanh nhiều dòng để sửa cả vùng
-            self.drag_run = tools.text_run_at(self.model.doc[i], self.to_page(i, sp)) \
-                if e.modifiers() & Qt.ControlModifier else None
+            # bấm vào một dòng chữ rồi kéo = dời dòng đó (giữ Ctrl: dời cả đoạn văn);
+            # bấm ở chỗ trống rồi kéo = quét khung quanh nhiều dòng để sửa cả vùng
+            page = self.model.doc[i]
+            run = tools.text_run_at(page, self.to_page(i, sp))
+            self.drag_run = None
+            if run is not None:
+                self.drag_run = dict(run)
+                self.drag_run["_group"] = tools.paragraph_runs(page, run) if e.modifiers() & Qt.ControlModifier else [run]
+                box = pymupdf.Rect(run["bbox"])
+                for r in self.drag_run["_group"]:
+                    box |= r["bbox"]
+                self.drag_run["bbox"] = box
         elif self.tool == "select" or self.tool in MARK_TOOLS:
             self.sel_rects, self.sel_text = [], ""
             self.sel_image = None
@@ -1322,15 +1332,16 @@ class Viewer(QGraphicsView):
             self.signRequested.emit(i, rect)
         elif tool == "edittext":
             if not small and self.drag_run:
-                run = self.drag_run
-                new_origin = run["origin"] + (b - a)
+                group = self.drag_run["_group"]
+                d = b - a
                 with self.model.edit(i):
-                    page = self.model.doc[i]
-                    tools.replace_text_run(page, run, "")
-                    pieces = tools.rich_lines(run, list(run["segs"]), run["size"], None)[0]
-                    used = tools.write_pieces(page, new_origin, pieces, run["size"])
+                    used = tools.move_text_runs(self.model.doc[i], group, d.x, d.y)
                     self.model.fonts_added = True
-                self.message.emit(f"Đã dời dòng chữ (phông thay thế: {used}).")
+                what = "dòng chữ" if len(group) == 1 else f"đoạn văn {len(group)} dòng"
+                self.message.emit(f"Đã dời {what}" + (f" (phông thay thế: {used})." if used else ".")
+                                  + " Ctrl+Z để hoàn tác.")
+            elif small and self.drag_run is not None:
+                self._edit_text_at(i, a)
             elif not small:
                 self._edit_text_region(i, rect)
             else:
