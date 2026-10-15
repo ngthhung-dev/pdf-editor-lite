@@ -43,7 +43,8 @@ def _version_file():
     out = os.path.join(os.path.abspath(os.path.join(SPECPATH, "..", "build_win")), "version_info.txt")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
-        f.write(src.replace("@B@", build).replace("\\u00a9", "\u00a9"))
+        import re as _re      # \uXXXX trong file mẫu -> chữ có dấu thật
+        f.write(_re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), src.replace("@B@", build)))
     return out
 
 

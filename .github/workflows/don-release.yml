@@ -1,11 +1,17 @@
 name: Dọn Release cũ
 
 # Mỗi lần chạy: xoá Release cũ, tag cũ, toàn bộ Artifacts và lịch sử các lần chạy trước; chỉ giữ Release mới nhất.
-# Chạy tay: Actions → Dọn Release cũ → Run workflow. (Đẩy nhánh "don-release" lên cũng chạy; nhánh tự xoá khi xong.)
+# Chạy tay: Actions → Dọn Release cũ → Run workflow (tích "Xoá cả bản mới nhất" để xoá sạch mọi Release).
+# Đẩy nhánh "don-release" lên cũng chạy (giữ bản mới nhất); nhánh "don-release-all" thì xoá sạch. Nhánh tự xoá khi xong.
 on:
   workflow_dispatch:
+    inputs:
+      all:
+        description: "Xoá cả bản mới nhất (xoá sạch mọi Release)"
+        type: boolean
+        default: false
   push:
-    branches: [don-release]
+    branches: [don-release, don-release-all]
 
 permissions:
   contents: write
@@ -24,7 +30,7 @@ jobs:
       - name: Release và tag cũ
         run: |
           latest=$(gh api repos/$R/releases/latest --jq .tag_name 2>/dev/null || true)
-          if [ -z "$latest" ]; then echo "Chưa có Release nào: không xoá gì."; exit 0; fi
+          if [ "${{ github.ref_name }}" = "don-release-all" ] || [ "${{ inputs.all }}" = "true" ]; then latest="__khong_giu__"; fi
           echo "Giữ lại: $latest"
           for t in $(gh api repos/$R/releases --paginate --jq '.[].tag_name'); do
             [ "$t" = "$latest" ] && continue
@@ -54,4 +60,4 @@ jobs:
         run: |
           echo "Release còn lại:"; gh api repos/$R/releases --jq '.[].tag_name'
           echo "Tag còn lại:"; gh api repos/$R/tags --jq '.[].name'
-          gh api -X DELETE repos/$R/git/refs/heads/don-release 2>/dev/null || true
+          gh api -X DELETE repos/$R/git/refs/heads/${{ github.ref_name }} 2>/dev/null || true

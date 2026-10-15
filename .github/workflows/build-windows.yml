@@ -22,9 +22,9 @@ on:
 permissions:
   contents: write
 
-# So build = so lan chay tru di BUILD_OFFSET (dat lai ve 1 tu lan chay thu 49)
+# So build = so lan chay tru di BUILD_OFFSET (dat lai ve 1 tu lan chay thu 53)
 env:
-  BUILD_OFFSET: 48
+  BUILD_OFFSET: 52
 
 jobs:
   windows:
@@ -215,13 +215,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.0-build${{ env.BUILD }}
-          name: PDF Editor Lite 1.0.0 (build ${{ env.BUILD }})
+          name: PDF Editor Lite v1.0.0 (bản build ${{ env.BUILD }})
           body: |
-            Bo cai tao tu dong (dong PDF Editor Lite truoc khi cai):
+            Bộ cài PDF Editor Lite v1.0.0 (bản build ${{ env.BUILD }}), giao diện tiếng Việt. Đóng PDF Editor Lite trước khi cài.
             - Windows 64-bit: file ...-Setup.exe
-            - macOS may chip Apple (M1 tro len): file ...-macOS-AppleSilicon.pkg
-            - macOS may chip Intel: file ...-macOS-Intel.pkg
+            - macOS máy chip Apple (M1 trở lên): file ...-macOS-AppleSilicon.pkg
+            - macOS máy chip Intel: file ...-macOS-Intel.pkg
             - Linux Mint / Ubuntu / Debian 64-bit: file .deb
-            macOS: bo cai chua co chu ky Apple, lan dau bam chuot phai vao file .pkg > Open (hoac System Settings > Privacy & Security > Open Anyway).
+            macOS: bộ cài chưa có chữ ký Apple, lần đầu bấm chuột phải vào file .pkg > Open (hoặc System Settings > Privacy & Security > Open Anyway).
           files: out/*
           fail_on_unmatched_files: true
