@@ -2865,7 +2865,7 @@ class MainWindow(QMainWindow):
         from . import launch
         m = launch.MARKS
         steps = [("python", "Nạp chương trình (Windows nạp file, quét virus…)"), ("qt", "Nạp giao diện Qt"),
-                 ("splash", "Hiện khung chờ"), ("import", "Nạp thư viện PDF và các chức năng"),
+                 ("import", "Nạp thư viện PDF và các chức năng"),
                  ("vi", "Nạp bản dịch tiếng Việt của Qt"), ("icon", "Biểu tượng app"), ("fusion", "Kiểu giao diện"),
                  ("style", "Bảng màu"), ("fonts", f"Dò phông chữ trên máy ({m.get('so_phong', '?')} họ phông)"),
                  ("textuse", "Dùng phông lần đầu"), ("mainwindow", "Dựng cửa sổ chính"),
@@ -3026,7 +3026,7 @@ def run(argv: list[str]) -> int:
 
 
 def start(app, files: list[str], lock, splash=None, background: bool = False) -> int:
-    """Phần còn lại của việc khởi động, sau khi khung chờ đã hiện (xem launch.py)."""
+    """Phần còn lại của việc khởi động (xem launch.py)."""
     from . import launch
     from . import vi_qt
     vi_qt.install(app)            # nút và hộp thoại chuẩn của Qt hiện bằng tiếng Việt

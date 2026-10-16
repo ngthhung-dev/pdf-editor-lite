@@ -87,32 +87,6 @@ def send_to_running(files: list[str]) -> bool:
     return True
 
 
-def _splash(files: list[str]):
-    """Khung chờ nhỏ hiện ngay khi bấm mở, trong lúc nạp phần còn lại của app. Dùng ảnh vẽ sẵn: vẽ chữ lúc này
-    buộc Qt dò hết phông trong máy (trên Windows mất hơn 1 giây), làm khung chờ hiện chậm đúng bằng chừng đó."""
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QGuiApplication, QPixmap
-    from PySide6.QtWidgets import QLabel
-    roots = [getattr(sys, "_MEIPASS", ""), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
-    pm = QPixmap()
-    for r in roots:
-        if r and pm.load(os.path.join(r, "assets", "splash.png")):
-            break
-    if pm.isNull():
-        return None
-    # Cửa sổ nhãn trơn thay cho QSplashScreen: QSplashScreen.show() có thể đứng chờ tới 1 giây cho cửa sổ "hiện ra".
-    s = QLabel()
-    s.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-    s.setPixmap(pm)
-    s.resize(pm.size())
-    scr = QGuiApplication.primaryScreen()
-    if scr is not None:
-        s.move(scr.availableGeometry().center() - s.rect().center())
-    s.show()
-    s.finish = lambda _w: s.close()
-    return s
-
-
 def main(argv: list[str]) -> int:
     mark("python")
     if len(argv) > 1 and argv[1] == "--selftest":
@@ -144,14 +118,7 @@ def main(argv: list[str]) -> int:
     except Exception:
         pass
     mark("lock")
-    splash = None
-    try:
-        if not background:
-            splash = _splash(files)
-            app.processEvents()
-    except Exception:
-        pass
-    mark("splash")
+    splash = None       # không hiện khung chờ "Đang khởi động": cửa sổ chính hiện thẳng khi đã sẵn sàng
     from .app import start
     mark("import")
     return start(app, files, lock, splash, background)
