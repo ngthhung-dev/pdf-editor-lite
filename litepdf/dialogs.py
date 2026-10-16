@@ -2537,10 +2537,9 @@ class OcrDialog(QDialog):
         self.lang.setEnabled(True)
         ok = True
         if kind == "tesseract":
-            if "vie" in self.tess_langs and "eng" in self.tess_langs:
-                self.lang.addItem("Tiếng Việt + Tiếng Anh", "vie+eng")
-            for l in self.tess_langs:
-                self.lang.addItem({"vie": "Tiếng Việt", "eng": "Tiếng Anh"}.get(l, l), l)
+            from . import ocr
+            for key, name in ocr.tess_choices(self.tess_langs):
+                self.lang.addItem(name, key)
             ok = bool(self.tess_langs)
             if not ok:
                 self.lang.addItem("(chưa cài Tesseract nên chưa có ngôn ngữ nào)", "")
@@ -2556,8 +2555,9 @@ class OcrDialog(QDialog):
             ok = self.rapid_ok
             self.lang.setEnabled(ok)
             note = ("Model PaddleOCR chạy hoàn toàn trên máy, nội dung không gửi đi đâu. Lớp chữ ẩn được đặt lên trang gốc nên "
-                    "hình giữ nguyên độ nét. Chậm hơn Tesseract (vài giây mỗi trang). Model tiếng Việt được tải về ở lần "
-                    "dùng đầu tiên; chữ có nhiều dấu vẫn có thể sai, nên so thử với Tesseract trên tài liệu của bạn.")
+                    "hình giữ nguyên độ nét. Chậm hơn Tesseract (vài giây mỗi trang). Đọc chữ Trung, Nhật rất tốt; "
+                    "model tiếng Hàn được tải về ở lần dùng đầu tiên (cần mạng). Chữ Việt nhiều dấu vẫn có thể sai, "
+                    "nên so thử với Tesseract trên tài liệu của bạn.")
             if not ok:
                 note = "RapidOCR chưa được cài trong app. Bấm nút “Cài RapidOCR…” bên dưới (cần mạng, làm một lần)."
         else:

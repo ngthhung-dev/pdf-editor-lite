@@ -28,12 +28,12 @@ for pkg in pdf2docx python-pkcs11 rapidocr onnxruntime pyinstaller; do
 done
 
 step "2/7  Model tieng Viet/Latin cua RapidOCR"
-(cd "$ROOT" && "$VPY" -c "from litepdf import ocr; ocr.rapid_engine('latin', ''); print('ok')") \
+(cd "$ROOT" && "$VPY" -c "from litepdf import ocr; ocr.rapid_engine('latin', ''); ocr.rapid_engine('korean', ''); print('ok')") \
   && note "model latin: OK" || note "Chua tai duoc model latin: app se tu tai o lan dung dau."
 
 step "3/7  Du lieu ngon ngu Tesseract (vie, eng, osd)"
 mkdir -p "$VENDOR/tessdata"
-for l in vie eng osd; do
+for l in vie eng osd chi_sim chi_tra jpn kor; do
   f="$VENDOR/tessdata/$l.traineddata"
   [ -s "$f" ] || curl -L --fail -sS --retry 3 -o "$f" "https://github.com/tesseract-ocr/tessdata_fast/raw/main/$l.traineddata"
 done

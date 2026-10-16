@@ -19,8 +19,31 @@ import pymupdf
 from . import tools
 from . import translate as T
 
-RAPID_LANGS = [("latin", "Tiếng Việt / chữ Latin có dấu (tải model ~10 MB ở lần đầu)"),
-               ("multi", "Tiếng Anh, số, Trung – Nhật (model có sẵn, không cần mạng)")]
+RAPID_LANGS = [("latin", "Tiếng Việt / chữ Latin có dấu"),
+               ("multi", "Tiếng Trung (giản thể, phồn thể), Nhật, Anh, số"),
+               ("korean", "Tiếng Hàn (+ Anh, số)")]
+
+# Tên dễ hiểu cho các gói ngôn ngữ của Tesseract
+TESS_NAMES = {"vie": "Tiếng Việt", "eng": "Tiếng Anh", "chi_sim": "Tiếng Trung (giản thể)",
+              "chi_tra": "Tiếng Trung (phồn thể)", "jpn": "Tiếng Nhật", "kor": "Tiếng Hàn"}
+# Tổ hợp hay dùng: kèm tiếng Anh vì tài liệu Trung/Nhật/Hàn thường lẫn chữ Latin và số
+TESS_COMBOS = [("vie+eng", "Tiếng Việt + Tiếng Anh"),
+               ("chi_sim+eng", "Tiếng Trung giản thể + Tiếng Anh"),
+               ("chi_tra+eng", "Tiếng Trung phồn thể + Tiếng Anh"),
+               ("jpn+eng", "Tiếng Nhật + Tiếng Anh"),
+               ("kor+eng", "Tiếng Hàn + Tiếng Anh")]
+# Mã ngôn ngữ nguồn (khi dịch) → gói Tesseract / model RapidOCR phù hợp
+SOURCE_TESS = {"vi": "vie+eng", "en": "eng", "zh": "chi_sim+eng", "zh-cn": "chi_sim+eng", "zh-tw": "chi_tra+eng",
+               "ja": "jpn+eng", "ko": "kor+eng"}
+SOURCE_RAPID = {"zh": "multi", "zh-cn": "multi", "zh-tw": "multi", "ja": "multi", "en": "multi", "ko": "korean"}
+
+
+def tess_choices(langs: list[str]) -> list[tuple[str, str]]:
+    """[(mã, tên)] cho ô chọn ngôn ngữ của Tesseract, chỉ gồm các gói đã có trên máy."""
+    have = set(langs)
+    out = [(k, n) for k, n in TESS_COMBOS if set(k.split("+")) <= have]
+    out += [(l, TESS_NAMES.get(l, l)) for l in langs]
+    return out
 
 
 class OcrError(Exception):
@@ -91,15 +114,15 @@ def rapid_engine(lang: str, model_dir: str):
     if lang not in _rapid:
         from rapidocr import RapidOCR
         params = {"Global.log_level": "error"}
-        if lang == "latin":
+        if lang in ("latin", "korean"):
             from rapidocr.utils.typings import LangRec, ModelType, OCRVersion
             if tools.FROZEN:      # bản cài đặt: model kèm sẵn; nếu thiếu thì tải về thư mục dữ liệu (thư mục app không ghi được)
                 import rapidocr
-                own = os.path.join(os.path.dirname(rapidocr.__file__), "models", "latin_PP-OCRv5_rec_mobile.onnx")
+                own = os.path.join(os.path.dirname(rapidocr.__file__), "models", f"{lang}_PP-OCRv5_rec_mobile.onnx")
                 if not os.path.exists(own) and model_dir:
                     os.makedirs(model_dir, exist_ok=True)
                     params["Global.model_root_dir"] = model_dir
-            params.update({"Rec.lang_type": LangRec.LATIN,
+            params.update({"Rec.lang_type": LangRec.LATIN if lang == "latin" else LangRec.KOREAN,
                            "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.model_type": ModelType.MOBILE})
         try:
             import numpy as np
@@ -110,6 +133,9 @@ def rapid_engine(lang: str, model_dir: str):
             eng(probe)                                    # nạp (và tải, nếu thiếu) model ngay bây giờ để báo lỗi rõ ràng
             _rapid[lang] = eng
         except Exception as e:
+            if lang == "korean":
+                raise OcrError("Không tải được model tiếng Hàn của RapidOCR (cần mạng ở lần đầu, tải từ modelscope.cn).\n"
+                               "Kiểm tra mạng rồi thử lại, hoặc dùng Tesseract (tiếng Hàn có sẵn).\n\nChi tiết: " + str(e)[:300])
             if lang == "latin":
                 raise OcrError("Không tải được model tiếng Việt/Latin của RapidOCR (cần mạng ở lần đầu, tải từ modelscope.cn).\n"
                                "Kiểm tra mạng rồi thử lại, hoặc tạm dùng Tesseract / Gemini.\n\nChi tiết: " + str(e)[:300])

@@ -2403,6 +2403,20 @@ def _fold(s: str, plain: bool) -> str:
     return s
 
 
+def _is_cjk(c: str) -> bool:
+    o = ord(c)
+    return (0x2E80 <= o <= 0x9FFF or 0xAC00 <= o <= 0xD7AF or 0x1100 <= o <= 0x11FF or 0xF900 <= o <= 0xFAFF
+            or 0xFF00 <= o <= 0xFFEF or 0x20000 <= o <= 0x2FA1F)
+
+
+def _drop_cjk_spaces(chars: list, owners: list | None = None):
+    """Bỏ khoảng trắng / chỗ ngắt dòng nằm giữa hai chữ Trung–Nhật–Hàn. Chữ OCR hay bị chèn dấu cách giả
+    hoặc ngắt dòng giữa từ ("增值 税"), còn chữ Hàn thì lúc có lúc mất dấu cách: bỏ đi ở cả trang lẫn từ cần tìm."""
+    keep = [i for i, c in enumerate(chars)
+            if not (c == " " and 0 < i < len(chars) - 1 and _is_cjk(chars[i - 1]) and _is_cjk(chars[i + 1]))]
+    return [chars[i] for i in keep], ([owners[i] for i in keep] if owners is not None else None)
+
+
 def search_page(page, query: str) -> list:
     """Tìm `query` trong trang, trả về các khung chữ nhật (mỗi dòng của một kết quả một khung).
     Khác search_for của MuPDF (chỉ không phân biệt hoa thường với chữ không dấu): "đại việt" tìm ra "ĐẠI VIỆT".
@@ -2411,6 +2425,9 @@ def search_page(page, query: str) -> list:
     q = " ".join(_fold(query, plain).split())
     if not q:
         return []
+    cjk = any(_is_cjk(c) for c in q)
+    if cjk:
+        q = "".join(_drop_cjk_spaces(list(q))[0])
     text: list[str] = []      # từng mảnh chữ đã chuẩn hoá
     owner: list[int] = []     # mảnh đó thuộc ký tự nào (-1: khoảng trắng chèn giữa các dòng)
     chars: list[tuple] = []   # (khung, số dòng)
@@ -2436,6 +2453,8 @@ def search_page(page, query: str) -> list:
             continue
         flat.append(c)
         own.append(o)
+    if cjk:
+        flat, own = _drop_cjk_spaces(flat, own)
     hay = "".join(flat)
     out, start = [], 0
     while True:

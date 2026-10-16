@@ -60,18 +60,18 @@ foreach ($pkg in @("pdf2docx", "python-pkcs11", "rapidocr", "onnxruntime", "pyin
 
 # ---------------------------------------------------------------- 2. Model tieng Viet cua RapidOCR
 Step "2/8  Model tieng Viet/Latin cua RapidOCR (tai san de may nguoi dung khong can mang)"
-$warm = Start-Process -FilePath $vpy -ArgumentList "-c", "`"from litepdf import ocr; ocr.rapid_engine('latin', ''); print('model latin: OK')`"" -WorkingDirectory $root -PassThru -NoNewWindow
+$warm = Start-Process -FilePath $vpy -ArgumentList "-c", "`"from litepdf import ocr; ocr.rapid_engine('latin', ''); ocr.rapid_engine('korean', ''); print('model latin+korean: OK')`"" -WorkingDirectory $root -PassThru -NoNewWindow
 if (-not $warm.WaitForExit(300000)) { $warm.Kill(); Note "Tai model latin qua 5 phut: bo qua (app se tu tai o lan dung dau)." }
 elseif ($warm.ExitCode -ne 0) { Note "Chua tai duoc model latin: app se tu tai o lan dung dau tien (can mang)." }
 else { Note "model latin: OK" }
-$latin = Get-ChildItem -Path "$venv\Lib\site-packages\rapidocr\models" -Filter "*latin*" -ErrorAction SilentlyContinue
+$latin = Get-ChildItem -Path "$venv\Lib\site-packages\rapidocr\models" -Filter "*PP-OCRv5*" -ErrorAction SilentlyContinue
 Note ("file model latin trong goi: " + ($latin | ForEach-Object { $_.Name }) -join ", ")
 
 # ---------------------------------------------------------------- 3. Du lieu Tesseract
-Step "3/8  Du lieu ngon ngu Tesseract (vie, eng, osd)"
+Step "3/8  Du lieu ngon ngu Tesseract (vie, eng, osd, chi_sim, chi_tra, jpn, kor)"
 $tess = Join-Path $vendor "tessdata"
 New-Item -ItemType Directory -Force -Path $tess | Out-Null
-foreach ($l in @("vie", "eng", "osd")) {
+foreach ($l in @("vie", "eng", "osd", "chi_sim", "chi_tra", "jpn", "kor")) {
     Get-File "https://github.com/tesseract-ocr/tessdata_fast/raw/main/$l.traineddata" (Join-Path $tess "$l.traineddata")
 }
 

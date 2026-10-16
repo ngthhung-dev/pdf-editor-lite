@@ -41,7 +41,7 @@ Số sau chữ `build` là số bản: số càng lớn thì bản càng mới. 
 - PDF → Word, Excel, ảnh (PNG/JPG), văn bản, HTML; xuất mọi hình ảnh trong PDF ra thư mục.
 - Nén giảm dung lượng.
 
-**Nhận dạng chữ (OCR)** cho bản scan và ảnh chụp: Tesseract (nhanh, cho bản scan sạch), RapidOCR (cho ảnh chụp, scan xấu), hoặc Gemini.
+**Nhận dạng chữ (OCR)** cho bản scan và ảnh chụp: Tesseract (nhanh, cho bản scan sạch), RapidOCR (cho ảnh chụp, scan xấu), hoặc Gemini. Đọc được tiếng Việt, Anh, Trung (giản thể, phồn thể), Nhật, Hàn; tìm kiếm chữ Trung–Nhật–Hàn trên bản đã OCR không bị vướng dấu cách hay ngắt dòng giả.
 
 **Dịch tài liệu** sang ngôn ngữ khác, giữ nguyên bố cục, công thức toán / hoá học:
 - Google Translate (miễn phí, không cần key), Gemini (cần API key, có gói miễn phí), hoặc AI theo chuẩn OpenAI (OpenAI, OpenRouter, Ollama chạy ngay trên máy).
@@ -65,8 +65,8 @@ Danh sách phím tắt đầy đủ: trong app bấm **Ctrl+F1**.
    | Thành phần | Ghi chú |
    |---|---|
    | PDF Editor Lite | Bắt buộc |
-   | OCR Tesseract (tiếng Việt, tiếng Anh) | Kèm sẵn |
-   | OCR RapidOCR | Kèm sẵn |
+   | OCR Tesseract (Việt, Anh, Trung giản thể/phồn thể, Nhật, Hàn) | Kèm sẵn |
+   | OCR RapidOCR (Việt/Latin, Trung, Nhật, Hàn) | Kèm sẵn |
    | LibreOffice (Word / Excel / PowerPoint → PDF) | Kèm sẵn; bỏ tích nếu máy đã có Microsoft Office |
    | AI dịch chạy trên máy (Ollama + model) | Tải về khi cài (vài GB, cần RAM từ 8 GB) |
 

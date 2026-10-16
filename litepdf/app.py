@@ -2323,9 +2323,15 @@ class MainWindow(QMainWindow):
                     opts["gemini"] = ocr_engine
                 elif kind == "tesseract":
                     langs = tools.tess_languages()
-                    opts["lang"] = "vie+eng" if "vie" in langs and "eng" in langs else langs[0]
-                elif (o.get("source") or "") not in ("", "vi", "fr", "de", "es", "pt", "it"):
-                    opts["lang"] = "multi"
+                    src = (o.get("source") or "").lower()
+                    want = ocr.SOURCE_TESS.get(src) or ocr.SOURCE_TESS.get(src.split("-")[0]) or "vie+eng"
+                    if not set(want.split("+")) <= set(langs):
+                        want = "vie+eng" if "vie" in langs and "eng" in langs else langs[0]
+                    opts["lang"] = want
+                else:
+                    src = (o.get("source") or "").lower()
+                    opts["lang"] = ocr.SOURCE_RAPID.get(src) or ocr.SOURCE_RAPID.get(src.split("-")[0]) or \
+                        ("latin" if src in ("", "vi", "fr", "de", "es", "pt", "it") else "multi")
                 reader = ocr.make_reader(kind, opts, self.offload, lambda s_: prog.setLabelText(s_), min_score=0.6)
                 job = T.collect(work, pages, with_toc=o["toc"], image_reader=reader, progress=on_page,
                                 store=mem if o.get("tm", True) else None)
