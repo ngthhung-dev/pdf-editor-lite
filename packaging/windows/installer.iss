@@ -240,3 +240,14 @@ begin
   end;
 end;
 #endif
+
+// Tắt hẳn bản cũ đang chạy ngầm (chế độ Khởi động nhanh) trước khi chép file mới,
+// để không còn tiến trình bản cũ tiếp tục mở file sau khi đã cập nhật.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /T /IM {#AppExe}', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Sleep(500);
+  Result := '';
+end;
