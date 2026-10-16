@@ -11,10 +11,10 @@ Vào trang **[Releases](https://github.com/ngthhung-dev/pdf-editor-lite/releases
 
 | Hệ điều hành | File cần tải |
 |---|---|
-| Windows 10/11 64-bit | `PDF-Editor-Lite-1.0.0-build…-Setup.exe` |
-| macOS 12 trở lên, chip Apple (M1, M2, M3…) | `PDF-Editor-Lite-1.0.0-build…-macOS-AppleSilicon.pkg` |
-| macOS 12 trở lên, chip Intel | `PDF-Editor-Lite-1.0.0-build…-macOS-Intel.pkg` |
-| Linux Mint 21/22, Ubuntu 22.04+, Debian 64-bit | `pdf-editor-lite_1.0.0-build…_amd64.deb` |
+| Windows 10/11 64-bit | `PDF-Editor-Lite-1.0.1-Setup.exe` |
+| macOS 12 trở lên, chip Apple (M1, M2, M3…) | `PDF-Editor-Lite-1.0.1-macOS-AppleSilicon.pkg` |
+| macOS 12 trở lên, chip Intel | `PDF-Editor-Lite-1.0.1-macOS-Intel.pkg` |
+| Linux Mint 21/22, Ubuntu 22.04+, Debian 64-bit | `pdf-editor-lite_1.0.1_amd64.deb` |
 
 Số sau chữ `build` là số bản: số càng lớn thì bản càng mới. Hướng dẫn sử dụng đầy đủ có hình minh hoạ: [`assets/Huong dan su dung PDF Editor Lite.pdf`](assets/Huong%20dan%20su%20dung%20PDF%20Editor%20Lite.pdf) (trong app bấm **F1**).
 
@@ -85,7 +85,7 @@ Gỡ cài đặt: kéo PDF Editor Lite từ thư mục Applications vào Thùng 
 
 ### Linux Mint / Ubuntu / Debian
 ```bash
-sudo apt install ./pdf-editor-lite_1.0.0-build…_amd64.deb
+sudo apt install ./pdf-editor-lite_1.0.1_amd64.deb
 ```
 Hoặc nhấp đúp file `.deb` → **Install Package**. Gói đã kèm mọi thư viện, Tesseract, RapidOCR; LibreOffice được lấy từ kho phần mềm nếu máy chưa có.
 AI dịch chạy trên máy: mở mục **PDF Editor Lite – Cài AI dịch trên máy** trong menu ứng dụng.

@@ -28,6 +28,10 @@ try:                                    # số build do máy build ghi vào (b�
     from ._build import BUILD
 except Exception:
     BUILD = ""
+try:                                    # phiên bản phát hành do máy build ghi vào (1.0.1, 1.0.2…)
+    from ._build import VERSION
+except Exception:
+    pass
 VERSION_TEXT = VERSION + (f" (build {BUILD})" if BUILD else "")
 AUTHOR = "ngthhung"
 CONTACT_EMAIL = "ngthhung.dev@gmail.com"

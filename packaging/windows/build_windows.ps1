@@ -135,8 +135,8 @@ $hasRapid = Test-Path (Join-Path $rapid "rapidocr")
 
 # ---------------------------------------------------------------- 7. LibreOffice, Ollama, model
 Step "7/8  Tai LibreOffice / Ollama / model dich"
-$bn = if ($env:LITEPDF_BUILD) { $env:LITEPDF_BUILD } else { "0" }
-$defs = @("/DAppVer=1.0.0", "/DBuild=$bn")
+$ver = if ($env:LITEPDF_VERSION) { $env:LITEPDF_VERSION } else { "1.0.0" }
+$defs = @("/DAppVer=$ver")
 Note "tham so: NoLibreOffice=$NoLibreOffice NoOllama=$NoOllama NoModel=$NoModel Model=$Model"
 if ($hasRapid) { $defs += "/DWithRapid=1" }
 if (-not $NoLibreOffice) {

@@ -5,7 +5,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="$ROOT/build_linux"; VENDOR="$WORK/vendor"; DIST="$WORK/dist/PDFEditorLite"; OUT="$WORK/output"
-VER="1.0.0"; BUILD="${LITEPDF_BUILD:-0}"
+VER="${LITEPDF_VERSION:-1.0.0}"
 mkdir -p "$WORK" "$VENDOR" "$OUT"
 LOG="$WORK/build.log"; echo "Build PDF Editor Lite (Linux) - $(date '+%F %T')" > "$LOG"
 step() { echo; echo "=== $1 ==="; echo "$(date +%T)  $1" >> "$LOG"; }
@@ -52,10 +52,10 @@ ln -s /opt/pdf-editor-lite/PDFEditorLite "$PKG/usr/bin/pdf-editor-lite"
 install -m 644 "$ROOT/assets/app_icon.png" "$PKG/usr/share/icons/hicolor/256x256/apps/pdf-editor-lite.png"
 install -m 644 "$ROOT/packaging/linux/pdf-editor-lite.desktop" "$ROOT/packaging/linux/pdf-editor-lite-ai.desktop" "$PKG/usr/share/applications/"
 SIZE=$(du -sk "$PKG/opt" | cut -f1)
-sed -e "s/@VER@/$VER-$BUILD/" -e "s/@SIZE@/$SIZE/" "$ROOT/packaging/linux/control" > "$PKG/DEBIAN/control"
+sed -e "s/@VER@/$VER/" -e "s/@SIZE@/$SIZE/" "$ROOT/packaging/linux/control" > "$PKG/DEBIAN/control"
 install -m 755 "$ROOT/packaging/linux/postinst" "$PKG/DEBIAN/postinst"
 install -m 755 "$ROOT/packaging/linux/postinst" "$PKG/DEBIAN/postrm"
-DEB="$OUT/pdf-editor-lite_${VER}-build${BUILD}_amd64.deb"
+DEB="$OUT/pdf-editor-lite_${VER}_amd64.deb"
 dpkg-deb --build --root-owner-group -Zxz "$PKG" "$DEB" >> "$LOG"
 note "XONG: $(basename "$DEB")  $(du -m "$DEB" | cut -f1) MB"
 

@@ -17,11 +17,11 @@
 AppId={{6C1E6C0B-7B0E-4E7B-9B1B-2F5C3F0E9A41}
 AppName={#AppName}
 AppVersion={#AppVer}
-AppVerName={#AppName} {#AppVer} (build {#Build})
+AppVerName={#AppName} {#AppVer}
 AppPublisher=ngthhung
-VersionInfoVersion={#AppVer}.{#Build}
-VersionInfoTextVersion={#AppVer}.{#Build}
-VersionInfoProductVersion={#AppVer}.{#Build}
+VersionInfoVersion={#AppVer}
+VersionInfoTextVersion={#AppVer}
+VersionInfoProductVersion={#AppVer}
 VersionInfoProductTextVersion={#AppVer}
 VersionInfoProductName={#AppName}
 VersionInfoCompany=ngthhung

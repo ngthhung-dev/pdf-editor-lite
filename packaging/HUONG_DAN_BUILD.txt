@@ -3,12 +3,12 @@ CACH BUILD BO CAI - PDF Editor Lite 1.0.0
 
 CACH 1 - BUILD TU DONG TREN GITHUB (khuyen dung, khong can cai gi tren may)
   Moi lan day ma len nhanh main, workflow .github/workflows/build-windows.yml tu chay 4 viec song song:
-    - Windows 64-bit  -> PDF-Editor-Lite-1.0.0-build<N>-Setup.exe
-    - macOS chip Apple -> PDF-Editor-Lite-1.0.0-build<N>-macOS-AppleSilicon.pkg
-    - macOS chip Intel -> PDF-Editor-Lite-1.0.0-build<N>-macOS-Intel.pkg
-    - Linux 64-bit     -> pdf-editor-lite_1.0.0-build<N>_amd64.deb
+    - Windows 64-bit  -> PDF-Editor-Lite-1.0.1-Setup.exe
+    - macOS chip Apple -> PDF-Editor-Lite-1.0.1-macOS-AppleSilicon.pkg
+    - macOS chip Intel -> PDF-Editor-Lite-1.0.1-macOS-Intel.pkg
+    - Linux 64-bit     -> pdf-editor-lite_1.0.1_amd64.deb
   Moi bo cai duoc cai thu va chay tu kiem tra (--selftest); xong thi tat ca duoc dang vao muc Releases,
-  tag v1.0.0-build<N>. Nhat ky build va ket qua tu kiem tra nam o nhanh build-logs.
+  tag v1.0.1. Nhat ky build va ket qua tu kiem tra nam o nhanh build-logs.
   Chay tay: tab Actions > "Build installers (Windows, macOS, Linux)" > Run workflow
   (tuy chon cho Windows: kem LibreOffice, kem Ollama, kem san model dich).
 

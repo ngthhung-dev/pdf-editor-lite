@@ -5,7 +5,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="$ROOT/build_mac"; VENDOR="$WORK/vendor"; OUT="$WORK/output"
-VER="1.0.0"; BUILD="${LITEPDF_BUILD:-0}"; MODEL="${MODEL:-gemma3:4b}"
+VER="${LITEPDF_VERSION:-1.0.0}"; MODEL="${MODEL:-gemma3:4b}"
 ARCH="$(uname -m)"; [ "$ARCH" = arm64 ] && { TAG="AppleSilicon"; LOARCH="aarch64"; LOFILE="aarch64"; HOSTS="arm64"; } \
                                    || { TAG="Intel"; LOARCH="x86_64"; LOFILE="x86-64"; HOSTS="x86_64,arm64"; }
 mkdir -p "$WORK" "$VENDOR" "$OUT"
@@ -46,7 +46,7 @@ for s in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$WORK/app.icns"
 rm -rf "$WORK/dist"
-LITEPDF_TESSDATA="$VENDOR/tessdata" LITEPDF_ICNS="$WORK/app.icns" LITEPDF_BUILD="$BUILD" \
+LITEPDF_TESSDATA="$VENDOR/tessdata" LITEPDF_ICNS="$WORK/app.icns" LITEPDF_VERSION="$VER" \
   "$VPY" -m PyInstaller "$ROOT/packaging/PDFEditorLite.spec" --noconfirm --distpath "$WORK/dist" --workpath "$WORK/pyi" \
   >> "$WORK/pyinstaller.log" 2>&1 || { tail -40 "$WORK/pyinstaller.log" | tee -a "$LOG"; exit 1; }
 APP="$WORK/dist/PDF Editor Lite.app"
@@ -121,7 +121,7 @@ cat > "$WORK/distribution.xml" <<XML
   <pkg-ref id="dev.ngthhung.pdfeditorlite.ollama" version="$VER" onConclusion="none">ai.pkg</pkg-ref>
 </installer-gui-script>
 XML
-PKG="$OUT/PDF-Editor-Lite-${VER}-build${BUILD}-macOS-${TAG}.pkg"
+PKG="$OUT/PDF-Editor-Lite-${VER}-macOS-${TAG}.pkg"
 productbuild --distribution "$WORK/distribution.xml" --package-path "$PK" --resources "$RES" "$PKG" >> "$LOG" 2>&1
 note "XONG: $(basename "$PKG")  $(du -m "$PKG" | cut -f1) MB"
 echo; echo "XONG. File cai: $PKG"
