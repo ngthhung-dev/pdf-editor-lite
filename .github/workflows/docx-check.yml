@@ -1,0 +1,23 @@
+name: docx check
+on:
+  push:
+    branches: [docx-check]
+permissions:
+  contents: write
+jobs:
+  c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Validate
+        run: |
+          cd check && dotnet run -- . > ../result.txt 2>&1 || true
+          cat ../result.txt
+      - name: Log
+        if: always()
+        run: |
+          mkdir l && cp result.txt l/ && cd l && git init -q -b t && git config user.name a && git config user.email a@b.c && git add -A && git commit -q -m log
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" t:docx-check-logs
