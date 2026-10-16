@@ -15,7 +15,7 @@ import pymupdf
 from . import tools
 
 EMU = 12700                 # 1 điểm = 12700 EMU
-WORD_MAX = 22 * 72          # Word chỉ cho khổ giấy tối đa 22 inch mỗi chiều
+WORD_MAX = 22 * 72 - 4      # Word chỉ cho khổ giấy tối đa 22 inch mỗi chiều (chừa một chút cho chắc)
 
 # phông có sẵn trên Windows: giữ đúng tên; phông lạ đổi sang phông gần giống và kéo giãn chữ cho đúng bề rộng
 _KNOWN = {"arial": "Arial", "timesnewroman": "Times New Roman", "times": "Times New Roman", "calibri": "Calibri",
@@ -128,6 +128,22 @@ def _textbox(runs_xml: str, line_h: float, w: float) -> str:
             'anchor="t" anchorCtr="0" upright="1"><a:noAutofit/></wps:bodyPr></wps:wsp></a:graphicData></a:graphic>')
 
 
+def _vml_textbox(oid: int, x: float, y: float, w: float, h: float, z: int, runs_xml: str, line_h: float) -> str:
+    """Khung chữ kiểu VML: Word mọi phiên bản (kể cả 2007) đều đọc được."""
+    twips = max(20, int(round(line_h * 20)))
+    return (f'<w:r {_NS} xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" '
+            f'xmlns:w10="urn:schemas-microsoft-com:office:word"><w:pict>'
+            f'<v:shapetype id="_x0000_t202" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe">'
+            f'<v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/></v:shapetype>'
+            f'<v:shape id="tb{oid}" o:spid="_x0000_s{oid}" type="#_x0000_t202" filled="f" stroked="f" '
+            f'style="position:absolute;margin-left:{x:.2f}pt;margin-top:{y:.2f}pt;width:{w:.2f}pt;height:{h:.2f}pt;'
+            f'z-index:{z};mso-wrap-style:none;mso-position-horizontal-relative:page;'
+            f'mso-position-vertical-relative:page;v-text-anchor:top">'
+            f'<v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:pPr><w:spacing w:before="0" w:after="0" '
+            f'w:line="{twips}" w:lineRule="exact"/><w:ind w:left="0" w:right="0"/></w:pPr>{runs_xml}</w:p>'
+            f'</w:txbxContent></v:textbox><w10:wrap anchorx="page" anchory="page"/></v:shape></w:pict></w:r>')
+
+
 def _lines(page) -> list:
     """Các dòng chữ ngang nhìn thấy được: [(khung, [span...])]."""
     out = []
@@ -169,12 +185,13 @@ def _background(doc, pno: int, lines: list, dpi: int) -> tuple[bytes, str]:
                             text=pymupdf.PDF_REDACT_TEXT_REMOVE)
     rect = pg.rect
     z = dpi / 72
-    z = min(z, 9000 / max(rect.width, rect.height))         # không để ảnh quá lớn (trang khổ to)
+    # ảnh nền không quá 4000 điểm ảnh mỗi chiều / 12 triệu điểm ảnh: ảnh quá lớn làm Word báo lỗi khi mở (thiếu bộ nhớ)
+    z = min(z, 4000 / max(rect.width, rect.height), (12e6 / max(1.0, rect.width * rect.height)) ** 0.5)
     pix = pg.get_pixmap(matrix=pymupdf.Matrix(z, z), alpha=False)
     return pix.tobytes("jpeg", jpg_quality=90), "jpeg"
 
 
-def convert(doc, out: str, dpi: int = 200, progress=None) -> None:
+def convert(doc, out: str, dpi: int = 200, progress=None, boxes: str = "wps") -> None:
     from docx import Document
     from docx.enum.section import WD_SECTION
     from docx.oxml import parse_xml
@@ -253,7 +270,10 @@ def convert(doc, out: str, dpi: int = 200, progress=None) -> None:
             line_h = max(r.height * s, 1.0)
             # khung rộng hơn dòng một chút: phông trên máy khác đôi chút cũng không bị xuống dòng
             bw = r.width * s * 1.15 + 4
-            graphic = _textbox("".join(runs), line_h, bw)
-            para._p.append(parse_xml(_anchor(oid, r.x0 * s, top, bw, line_h, z, False, graphic)))
+            if boxes == "vml":
+                para._p.append(parse_xml(_vml_textbox(oid, r.x0 * s, top, bw, line_h, z, "".join(runs), line_h)))
+            elif boxes == "wps":
+                graphic = _textbox("".join(runs), line_h, bw)
+                para._p.append(parse_xml(_anchor(oid, r.x0 * s, top, bw, line_h, z, False, graphic)))
             oid += 1
     wd.save(out)
