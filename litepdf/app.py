@@ -2189,8 +2189,29 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------- chuyển đổi
     def to_word(self, t):
+        o = form_dialog(self, "PDF → Word", [
+            ("mode", "Cách chuyển", "choice", self.cfg.get("word_mode", "exact"), [
+                ("exact", "Giữ đúng 100% bố cục (tờ rơi, hồ sơ, giấy tờ): chữ sửa được, hình và nền thành ảnh nền"),
+                ("flow", "Văn bản liền mạch (sách, báo cáo dài): dễ sửa và thêm bớt chữ, bố cục có thể lệch")]),
+            ("dpi", "Độ nét ảnh nền (DPI, chỉ dùng khi giữ đúng bố cục)", "int", 200, (100, 400))],
+            ok_text="Chọn nơi lưu…")
+        if o is None:
+            return
+        self.cfg["word_mode"] = o["mode"]
         out = self._out_path(t, "", ".docx", "Word (*.docx)")
         if not out:
+            return
+        if o["mode"] == "exact":
+            from . import docx_exact
+            prog, cb = self.progress("Đang chuyển sang Word (giữ đúng bố cục)…")
+            try:
+                docx_exact.convert(t.model.doc, out, o["dpi"], cb)
+            finally:
+                prog.close()
+            self.msg(f"Đã xuất: {out}")
+            self.info(f"Đã chuyển sang Word, giữ đúng bố cục:\n{out}\n\nMỗi dòng chữ là một khung chữ đặt đúng chỗ, "
+                      "sửa trực tiếp được; hình, nét vẽ và màu nền nằm trong ảnh nền của trang. Phông chữ máy không có "
+                      "được đổi sang phông gần giống và kéo giãn cho đúng bề rộng dòng.")
             return
         self.msg("Đang chuyển sang Word, tài liệu dài có thể mất vài phút…", 0)
         self.busy()
@@ -2201,8 +2222,8 @@ class MainWindow(QMainWindow):
             os.unlink(tmp)
             self.done()
         self.msg(f"Đã xuất: {out}")
-        self.info(f"Đã chuyển sang Word:\n{out}\n\nLưu ý: bố cục phức tạp có thể lệch so với bản PDF, "
-                  "bản scan cần chạy OCR trước.")
+        self.info(f"Đã chuyển sang Word:\n{out}\n\nLưu ý: cách chuyển văn bản liền mạch có thể làm lệch bố cục phức tạp; "
+                  "cần giữ nguyên bố cục thì chọn “Giữ đúng 100% bố cục”. Bản scan cần chạy OCR trước.")
 
     def to_excel(self, t):
         out = self._out_path(t, "", ".xlsx", "Excel (*.xlsx)")
