@@ -1,0 +1,110 @@
+Build PDF Editor Lite (macOS x86_64) - 2026-10-16 09:36:48
+09:36:48  1/7  Python va thu vien
+  09:37:34  thu vien chinh: OK (cryptography 48.0.1,pymupdf 1.28.2,PySide6_Essentials 6.12.0,
+  09:37:42  pdf2docx : OK
+  09:37:43  python-pkcs11 : OK
+  09:37:51  rapidocr : OK
+  09:38:22  onnxruntime : OK
+  09:38:30  pyinstaller : OK
+09:38:30  2/7  Model tieng Viet/Latin cua RapidOCR
+  09:38:57  model latin: OK
+09:38:57  3/7  Du lieu ngon ngu Tesseract (vie, eng, osd)
+09:39:04  4/7  Dong goi app (.app) bang PyInstaller
+/Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/dist/PDF Editor Lite.app: replacing existing signature
+--- cv2 trong goi:
+/Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/dist/PDF Editor Lite.app/Contents/Frameworks/cv2:
+total 154736
+drwxr-xr-x   13 runner  staff       416 Oct 16 09:43 __dot__dylibs
+lrwxr-xr-x    1 runner  staff        31 Oct 16 09:42 __init__.py -> ../../Resources/cv2/__init__.py
+drwxr-xr-x   15 runner  staff       480 Oct 16 09:43 .
+drwxr-xr-x  104 runner  staff      3328 Oct 16 09:43 ..
+lrwxr-xr-x    1 runner  staff        13 Oct 16 09:42 .dylibs -> __dot__dylibs
+lrwxr-xr-x    1 runner  staff        31 Oct 16 09:42 config-3.py -> ../../Resources/cv2/config-3.py
+lrwxr-xr-x    1 runner  staff        29 Oct 16 09:42 config.py -> ../../Resources/cv2/config.py
+-rwxr-xr-x    1 runner  staff  79222224 Oct 16 09:43 cv2.abi3.so
+lrwxr-xr-x    1 runner  staff        24 Oct 16 09:42 data -> ../../Resources/cv2/data
+lrwxr-xr-x    1 runner  staff        38 Oct 16 09:42 load_config_py3.py -> ../../Resources/cv2/load_config_py3.py
+lrwxr-xr-x    1 runner  staff        31 Oct 16 09:42 mat_wrapper -> ../../Resources/cv2/mat_wrapper
+lrwxr-xr-x    1 runner  staff        24 Oct 16 09:42 misc -> ../../Resources/cv2/misc
+lrwxr-xr-x    1 runner  staff        26 Oct 16 09:42 typing -> ../../Resources/cv2/typing
+lrwxr-xr-x    1 runner  staff        25 Oct 16 09:42 utils -> ../../Resources/cv2/utils
+lrwxr-xr-x    1 runner  staff        30 Oct 16 09:42 version.py -> ../../Resources/cv2/version.py
+
+/Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/dist/PDF Editor Lite.app/Contents/Resources/cv2:
+total 48
+-rw-r--r--    1 runner  staff  6630 Oct 16 09:42 __init__.py
+drwxr-xr-x   14 runner  staff   448 Oct 16 09:42 .
+drwxr-xr-x  104 runner  staff  3328 Oct 16 09:42 ..
+lrwxr-xr-x    1 runner  staff    28 Oct 16 09:42 .dylibs -> ../../Frameworks/cv2/.dylibs
+-rw-r--r--    1 runner  staff   724 Oct 16 09:42 config-3.py
+-rw-r--r--    1 runner  staff   109 Oct 16 09:42 config.py
+lrwxr-xr-x    1 runner  staff    32 Oct 16 09:42 cv2.abi3.so -> ../../Frameworks/cv2/cv2.abi3.so
+drwxr-xr-x    3 runner  staff    96 Oct 16 09:42 data
+-rw-r--r--    1 runner  staff   244 Oct 16 09:42 load_config_py3.py
+drwxr-xr-x    3 runner  staff    96 Oct 16 09:42 mat_wrapper
+drwxr-xr-x    4 runner  staff   128 Oct 16 09:42 misc
+drwxr-xr-x    3 runner  staff    96 Oct 16 09:42 typing
+drwxr-xr-x    3 runner  staff    96 Oct 16 09:42 utils
+-rw-r--r--    1 runner  staff    91 Oct 16 09:42 version.py
+  09:43:10  dung luong .app: 481 MB
+09:43:10  5/7  Tu kiem tra ban dong goi
+{
+ "version": "1.0.7",
+ "build": "",
+ "frozen": true,
+ "app_dir": "/Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/dist/PDF Editor Lite.app/Contents/MacOS",
+ "pymupdf": "1.28.2:",
+ "pyhanko": true,
+ "pkcs11": true,
+ "pdf2docx": true,
+ "openpyxl": "3.1.5",
+ "fonts": true,
+ "tessdata": [
+  "chi_sim",
+  "chi_tra",
+  "eng",
+  "jpn",
+  "kor",
+  "vie"
+ ],
+ "rapidocr": true,
+ "soffice": null,
+ "data_dir": "/Users/runner/Library/Application Support/PDF Editor Lite",
+ "tesseract_run": "Hello OCR 123",
+ "rapidocr_run": {
+  "multi": [
+   "Hello OCR 123"
+  ],
+  "latin": [
+   "Hello OCR 123"
+  ]
+ },
+ "hoan_tac_file_lon": {
+  "che_do_noi_duoi": true,
+  "van_noi_duoi_sau_hoan_tac": true,
+  "dung": true,
+  "file_tam_da_xoa": true
+ }
+}09:43:38  6/7  LibreOffice
+  09:43:38  LibreOffice phien ban 25.8.7 (x86_64)
+  09:43:42  LibreOffice.dmg: 298 MB
+pkgbuild: Adding top-level postinstall script
+pkgbuild: Wrote package to /Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/pkgs/lo.pkg
+pkgbuild: Adding top-level postinstall script
+pkgbuild: Wrote package to /Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/pkgs/ai.pkg
+09:44:04  7/7  Tao bo cai .pkg
+pkgbuild: Inferring bundle components from contents of /Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/root
+pkgbuild: Writing new component property list to /Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/comp.plist
+pkgbuild: Reading components from /Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/comp.plist
+pkgbuild: Adding component at PDF Editor Lite.app/Contents/Frameworks/PySide6/Qt/lib/QtWidgets.framework
+pkgbuild: Adding component at PDF Editor Lite.app/Contents/Frameworks/Python.framework
+pkgbuild: Adding component at PDF Editor Lite.app
+pkgbuild: Adding component at PDF Editor Lite.app/Contents/Frameworks/PySide6/Qt/lib/QtCore.framework
+pkgbuild: Adding component at PDF Editor Lite.app/Contents/Frameworks/PySide6/Qt/lib/QtSvg.framework
+pkgbuild: Adding component at PDF Editor Lite.app/Contents/Frameworks/PySide6/Qt/lib/QtDBus.framework
+pkgbuild: Adding component at PDF Editor Lite.app/Contents/Frameworks/PySide6/Qt/lib/QtGui.framework
+pkgbuild: Adding component at PDF Editor Lite.app/Contents/Frameworks/PySide6/Qt/lib/QtPrintSupport.framework
+pkgbuild: Adding component at PDF Editor Lite.app/Contents/Frameworks/PySide6/Qt/lib/QtNetwork.framework
+pkgbuild: Wrote package to /Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/pkgs/app.pkg
+productbuild: Wrote product to /Users/runner/work/pdf-editor-lite/pdf-editor-lite/build_mac/output/PDF-Editor-Lite-1.0.7-macOS-Intel.pkg
+  09:44:59  XONG: PDF-Editor-Lite-1.0.7-macOS-Intel.pkg  506 MB

@@ -1,0 +1,56 @@
+Build PDF Editor Lite (Linux) - 2026-10-16 09:37:06
+09:37:06  1/6  Python va thu vien
+  09:37:25  thu vien chinh: OK
+  09:37:31  pdf2docx : OK
+  09:37:32  python-pkcs11 : OK
+  09:37:36  rapidocr : OK
+  09:37:38  onnxruntime : OK
+  09:37:41  pyinstaller : OK
+09:37:41  2/6  Model tieng Viet/Latin cua RapidOCR
+  09:37:49  model latin: OK
+09:37:49  3/6  Du lieu ngon ngu Tesseract (vie, eng, osd)
+  09:37:53  tessdata: chi_sim.traineddata chi_tra.traineddata eng.traineddata jpn.traineddata kor.traineddata osd.traineddata vie.traineddata 
+09:37:53  4/6  Dong goi app bang PyInstaller
+  09:38:51  dung luong ban dong goi: 715 MB
+09:38:51  5/6  Tao goi .deb
+dpkg-deb: building package 'pdf-editor-lite' in '/home/runner/work/pdf-editor-lite/pdf-editor-lite/build_linux/output/pdf-editor-lite_1.0.7_amd64.deb'.
+  09:40:12  XONG: pdf-editor-lite_1.0.7_amd64.deb  234 MB
+09:40:12  6/6  Tu kiem tra ban dong goi
+{
+ "version": "1.0.7",
+ "build": "",
+ "frozen": true,
+ "app_dir": "/home/runner/work/pdf-editor-lite/pdf-editor-lite/build_linux/dist/PDFEditorLite",
+ "pymupdf": "1.28.2:",
+ "pyhanko": true,
+ "pkcs11": true,
+ "pdf2docx": true,
+ "openpyxl": "3.1.5",
+ "fonts": true,
+ "tessdata": [
+  "chi_sim",
+  "chi_tra",
+  "eng",
+  "jpn",
+  "kor",
+  "vie"
+ ],
+ "rapidocr": true,
+ "soffice": null,
+ "data_dir": "/home/runner/.config/PDF Editor Lite",
+ "tesseract_run": "Hello OCR 123",
+ "rapidocr_run": {
+  "multi": [
+   "Hello OCR 123"
+  ],
+  "latin": [
+   "Hello OCR 123"
+  ]
+ },
+ "hoan_tac_file_lon": {
+  "che_do_noi_duoi": true,
+  "van_noi_duoi_sau_hoan_tac": true,
+  "dung": true,
+  "file_tam_da_xoa": true
+ }
+}

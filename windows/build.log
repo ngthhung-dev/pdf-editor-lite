@@ -1,0 +1,80 @@
+Build PDF Editor Lite - 2026-10-16 09:36:43
+09:36:43  1/8  Python va thu vien
+  09:37:02  thu vien chinh: OK
+  09:37:08  pdf2docx : OK
+  09:37:09  python-pkcs11 : OK
+  09:37:14  rapidocr : OK
+  09:37:17  onnxruntime : OK
+  09:37:20  pyinstaller : OK
+09:37:20  2/8  Model tieng Viet/Latin cua RapidOCR (tai san de may nguoi dung khong can mang)
+  09:37:27  model latin: OK
+  09:37:27  file model latin trong goi: korean_PP-OCRv5_rec_mobile.onnx latin_PP-OCRv5_rec_mobile.onnx
+09:37:27  3/8  Du lieu ngon ngu Tesseract (vie, eng, osd, chi_sim, chi_tra, jpn, kor)
+  09:37:27  tai: https://github.com/tesseract-ocr/tessdata_fast/raw/main/vie.traineddata
+  09:37:27    xong: 1 MB
+  09:37:27  tai: https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata
+  09:37:28    xong: 4 MB
+  09:37:28  tai: https://github.com/tesseract-ocr/tessdata_fast/raw/main/osd.traineddata
+  09:37:29    xong: 10 MB
+  09:37:29  tai: https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_sim.traineddata
+  09:37:29    xong: 2 MB
+  09:37:29  tai: https://github.com/tesseract-ocr/tessdata_fast/raw/main/chi_tra.traineddata
+  09:37:30    xong: 2 MB
+  09:37:30  tai: https://github.com/tesseract-ocr/tessdata_fast/raw/main/jpn.traineddata
+  09:37:30    xong: 2 MB
+  09:37:30  tai: https://github.com/tesseract-ocr/tessdata_fast/raw/main/kor.traineddata
+  09:37:31    xong: 2 MB
+09:37:31  4/8  Dong goi app bang PyInstaller
+  09:38:39  dung luong ban dong goi: 474 MB
+09:38:39  5/8  Tu kiem tra ban dong goi
+{
+ "version": "1.0.7",
+ "build": "",
+ "frozen": true,
+ "app_dir": "D:\\a\\pdf-editor-lite\\pdf-editor-lite\\build_win\\dist\\PDFEditorLite",
+ "pymupdf": "1.28.2:",
+ "pyhanko": true,
+ "pkcs11": true,
+ "pdf2docx": true,
+ "openpyxl": "3.1.5",
+ "fonts": true,
+ "tessdata": [
+  "chi_sim",
+  "chi_tra",
+  "eng",
+  "jpn",
+  "kor",
+  "vie"
+ ],
+ "rapidocr": true,
+ "soffice": null,
+ "data_dir": "C:\\Users\\runneradmin\\AppData\\Roaming\\PDF Editor Lite",
+ "tesseract_run": "Hello OCR 123",
+ "rapidocr_run": {
+  "multi": [
+   "Hello OCR 123"
+  ],
+  "latin": [
+   "Hello OCR 123"
+  ]
+ },
+ "hoan_tac_file_lon": {
+  "che_do_noi_duoi": true,
+  "van_noi_duoi_sau_hoan_tac": true,
+  "dung": true,
+  "file_tam_da_xoa": true
+ }
+}
+  09:38:46  khoi dong lan 1 (giay tu luc tao tien trinh): {"python": 0.201, "qt": 0.287, "lock": 0.325, "import": 0.419, "vi": 0.419, "icon": 0.421, "fusion": 0.425, "style": 0.425, "so_phong": 157, "fonts": 0.431, "textuse": 0.71, "mainwindow": 0.758, "window": 0.82, "file": 0.889, "painted": 1.191}
+  09:38:46  khoi dong lan 2 (giay tu luc tao tien trinh): {"python": 0.197, "qt": 0.217, "lock": 0.231, "import": 0.326, "vi": 0.326, "icon": 0.328, "fusion": 0.332, "style": 0.332, "so_phong": 157, "fonts": 0.34, "textuse": 0.341, "mainwindow": 0.366, "window": 0.396, "file": 0.442, "painted": 0.745}
+  09:38:59  khoi dong nhanh: giao file cho ban chay san mat 0.28 giay, ban chay san con song: True
+  09:39:04  khoi dong voi windows:nodirectwrite: {"python": 0.209, "qt": 0.229, "lock": 0.247, "import": 0.348, "vi": 0.348, "icon": 0.352, "fusion": 0.356, "style": 0.356, "so_phong": 154, "fonts": 0.356, "textuse": 0.397, "mainwindow": 0.837, "window": 0.903, "file": 3.478, "painted": 3.778}
+  09:39:05  khoi dong voi windows:fontengine=freetype: {"python": 0.206, "qt": 0.226, "lock": 0.236, "import": 0.333, "vi": 0.333, "icon": 0.335, "fusion": 0.339, "style": 0.339, "so_phong": 102, "fonts": 0.343, "textuse": 0.41, "mainwindow": 0.435, "window": 0.465, "file": 0.873, "painted": 1.177}
+09:39:05  6/8  Tach thanh phan tuy chon (RapidOCR)
+09:39:05  7/8  Tai LibreOffice / Ollama / model dich
+  09:39:05  tham so: NoLibreOffice=False NoOllama=False NoModel=True Model=gemma3:4b
+09:39:05  8/8  Tao file cai bang Inno Setup
+  09:39:05  tuy chon: /DAppVer=1.0.7 /DWithRapid=1 /DWithLO=1 /DWithOllama=1 /DModel=gemma3:4b
+  09:39:58  XONG: PDF-Editor-Lite-1.0.7-Setup.exe  533 MB
+  09:39:59  thong tin PDF-Editor-Lite-1.0.7-Setup.exe: mo ta=[PDF Editor Lite by ngthhung                                 ] phien ban file=[1.0.7               ] san pham=[PDF Editor Lite                                              1.0.7                                             ] cong ty=[ngthhung                                                    ] ban quyen=[Copyright © 2026 ngthhung                                                                           ] ghi chu=[This installation was built with Inno Setup.]
+  09:39:59  thong tin PDFEditorLite.exe: mo ta=[PDF Editor Lite by ngthhung] phien ban file=[1.0.7] san pham=[PDF Editor Lite 1.0.7] cong ty=[ngthhung] ban quyen=[Copyright © 2026 ngthhung] ghi chu=[PDF Editor Lite by ngthhung - Liên hệ: ngthhung.dev@gmail.com - 0968 799 365]
