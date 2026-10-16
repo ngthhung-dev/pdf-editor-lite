@@ -559,7 +559,7 @@ def pdf_to_html(doc, out: str) -> None:
     with open(out, "w", encoding="utf-8") as f:
         f.write("<!doctype html><html><head><meta charset='utf-8'><title>%s</title></head><body>\n"
                 % os.path.basename(out))
-        for page in doc:
+        for page in _text_ready(doc):
             f.write(page.get_text("html"))
         f.write("</body></html>")
 
@@ -572,9 +572,18 @@ def pdf_to_docx(pdf_path: str, out: str) -> None:
     import logging
     logging.disable(logging.CRITICAL)
     try:
+        d = pymupdf.open(pdf_path)
+        if d.needs_pass == 0 and add_missing_tounicode(d):
+            d.saveIncr()
+        d.close()
+    except Exception:
+        pass
+    try:
         cv = Converter(pdf_path)
         cv.convert(out)
         cv.close()
+        from . import ooxml_fix
+        ooxml_fix.fix(out)
     except Exception as e:
         raise PdfError(f"Không chuyển được sang Word: {e}")
     finally:
@@ -590,7 +599,7 @@ def pdf_to_xlsx(doc, out: str) -> int:
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     total = 0
-    for i, page in enumerate(doc):
+    for i, page in enumerate(_text_ready(doc)):
         ws = wb.create_sheet(f"Trang {i + 1}")
         row = 1
         try:
@@ -610,6 +619,8 @@ def pdf_to_xlsx(doc, out: str) -> int:
                     ws.cell(row=row, column=c, value=_num(v))
                 row += 1
     wb.save(out)
+    from . import ooxml_fix
+    ooxml_fix.fix(out)
     return total
 
 
@@ -864,6 +875,70 @@ def _glyph_map(doc, xref: int) -> dict | None:
         m = None
     cache[xref] = m
     return m
+
+
+def _tounicode_cmap(m: dict) -> bytes:
+    items = sorted((g, u) for g, u in m.items() if 0 <= g <= 0xFFFF)
+    out = [b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap",
+           b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def",
+           b"/CMapName /Adobe-Identity-UCS def /CMapType 2 def",
+           b"1 begincodespacerange <0000> <FFFF> endcodespacerange"]
+    for k in range(0, len(items), 100):
+        chunk = items[k:k + 100]
+        out.append(b"%d beginbfchar" % len(chunk))
+        for g, u in chunk:
+            out.append(b"<%04X> <%s>" % (g, u.encode("utf-16-be").hex().upper().encode()))
+        out.append(b"endbfchar")
+    out.append(b"endcmap CMapName currentdict /CMap defineresource pop end end")
+    return b"\n".join(out)
+
+
+def add_missing_tounicode(doc) -> int:
+    """Gắn bảng mã ToUnicode (dựng từ bảng mã của phông nhúng) cho các phông thiếu, để công cụ khác
+    (pdf2docx, xuất HTML, bảng Excel) đọc đúng chữ. Sửa trên doc truyền vào; trả về số phông đã gắn."""
+    n, seen = 0, set()
+    for page in doc:
+        try:
+            fonts = page.get_fonts()
+        except Exception:
+            continue
+        for xref, _ext, typ, _base, _name, enc in fonts:
+            if xref in seen or typ != "Type0" or not str(enc).startswith("Identity"):
+                continue
+            seen.add(xref)
+            try:
+                if doc.xref_get_key(xref, "ToUnicode")[0] != "null":
+                    continue
+                desc = doc.xref_get_key(xref, "DescendantFonts")
+                dx = int(desc[1].strip("[] ").split()[0]) if desc[0] == "array" else \
+                    int(desc[1].split()[0]) if desc[0] == "xref" else 0
+                if dx:
+                    c2g = doc.xref_get_key(dx, "CIDToGIDMap")
+                    if c2g[0] not in ("null", "name"):
+                        continue          # CID khác số hình chữ: không đoán
+                m = _glyph_map(doc, xref)
+                if not m:
+                    continue
+                sx = doc.get_new_xref()
+                doc.update_object(sx, "<<>>")
+                doc.update_stream(sx, _tounicode_cmap(m))
+                doc.xref_set_key(xref, "ToUnicode", f"{sx} 0 R")
+                n += 1
+            except Exception:
+                continue
+    return n
+
+
+def _text_ready(doc):
+    """Bản sao trong bộ nhớ đã gắn ToUnicode nếu cần (không ghi gì ra đĩa); không cần thì trả lại doc gốc."""
+    try:
+        cp = pymupdf.open("pdf", doc.tobytes())
+        if add_missing_tounicode(cp):
+            return cp
+        cp.close()
+    except Exception:
+        pass
+    return doc
 
 
 def _broken_fonts(page) -> dict:

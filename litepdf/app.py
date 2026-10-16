@@ -2223,7 +2223,10 @@ class MainWindow(QMainWindow):
             self.done()
         self.msg(f"Đã xuất: {out}")
         self.info(f"Đã chuyển sang Word:\n{out}\n\nLưu ý: cách chuyển văn bản liền mạch có thể làm lệch bố cục phức tạp; "
-                  "cần giữ nguyên bố cục thì chọn “Giữ đúng 100% bố cục”. Bản scan cần chạy OCR trước.")
+                  "cần giữ nguyên bố cục thì chọn “Giữ đúng 100% bố cục”. Bản scan cần chạy OCR trước."
+                  + ("\n\nTrang của file này lớn hơn khổ tối đa Word hỗ trợ (56 cm) nên đã bị thu về 56 cm; "
+                     "nên dùng “Giữ đúng 100% bố cục” để Word tự thu nhỏ cả trang cho vừa."
+                     if any(max(p.rect.width, p.rect.height) > 1584 for p in t.model.doc) else ""))
 
     def to_excel(self, t):
         out = self._out_path(t, "", ".xlsx", "Excel (*.xlsx)")
