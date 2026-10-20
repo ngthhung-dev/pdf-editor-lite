@@ -62,8 +62,9 @@ Name: "vi"; MessagesFile: "Vietnamese.isl"
 SelectComponentsLabel2=Tích chọn những thành phần muốn cài, bỏ tích những thành phần không cần. Có thể chạy lại bộ cài này để thêm hoặc bớt thành phần sau.
 
 [Types]
+; Kieu dau tien la mac dinh: Thong thuong (KHONG tich LibreOffice, Ollama)
+Name: "standard"; Description: "Thông thường: không cài LibreOffice và AI dịch chạy trên máy"
 Name: "full"; Description: "Đầy đủ: cài tất cả, dùng được mọi chức năng ngay"
-Name: "standard"; Description: "Thông thường: không cài AI dịch chạy trên máy"
 Name: "compact"; Description: "Gọn nhẹ: chỉ phần chính của ứng dụng"
 Name: "custom"; Description: "Tự chọn"; Flags: iscustom
 
@@ -74,7 +75,7 @@ Name: "tess"; Description: "OCR trên máy cho bản scan sạch (Tesseract: ti�
 Name: "rapid"; Description: "OCR trên máy cho ảnh chụp / scan xấu (RapidOCR)"; Types: full standard
 #endif
 #ifdef WithLO
-Name: "lo"; Description: "LibreOffice: chuyển Word / Excel / PowerPoint sang PDF (bỏ tích nếu máy đã có Microsoft Office)"; Types: full standard
+Name: "lo"; Description: "LibreOffice: chuyển Word / Excel / PowerPoint sang PDF (không cần nếu máy đã có Microsoft Office)"; Types: full
 #endif
 #ifdef WithOllama
 Name: "ollama"; Description: "AI dịch chạy ngay trên máy, không cần API key (Ollama; TẢI VỀ khi cài ~1,5 GB; cần RAM từ 8 GB)"; Types: full
@@ -88,7 +89,7 @@ Name: "ollama\model"; Description: "Model dịch {#Model} (TẢI VỀ khi cài: 
 [Tasks]
 Name: "desktopicon"; Description: "Tạo lối tắt ngoài Desktop"
 Name: "assocpdf"; Description: "Thêm PDF Editor Lite vào danh sách chương trình mở file .pdf (Open with)"
-Name: "faststart"; Description: "Khởi động nhanh: chạy sẵn PDF Editor Lite (ẩn) khi đăng nhập Windows, mở file PDF là hiện ngay (app luôn chạy nền, tốn thêm một ít RAM)"
+Name: "faststart"; Description: "Khởi động nhanh: chạy sẵn PDF Editor Lite (ẩn) khi đăng nhập Windows, mở file PDF là hiện ngay (app luôn chạy nền, tốn thêm một ít RAM)"; Flags: unchecked
 
 [Files]
 Source: "{#Work}\dist\PDFEditorLite\*"; DestDir: "{app}"; Components: core; Flags: recursesubdirs createallsubdirs ignoreversion
