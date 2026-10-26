@@ -39,10 +39,18 @@ function Get-File($url, $out) {
 # ---------------------------------------------------------------- 1. Python + thu vien
 Step "1/8  Python va thu vien"
 $py = $null
-foreach ($c in @(@("py", "-3"), @("python"))) {
+# Uu tien Python do workflow chi dinh (setup-python), roi "python" tren PATH; "py -3" de cuoi vi no chon ban MOI NHAT
+# tren may (vd 3.14 vua duoc cai them vao may build), ma nhieu thu vien (cryptography, onnxruntime) chua chay duoc tren do.
+$cands = @()
+if ($env:pythonLocation -and (Test-Path "$env:pythonLocation\python.exe")) { $cands += ,@("$env:pythonLocation\python.exe") }
+$cands += ,@("python")
+$cands += ,@("py", "-3.12")
+$cands += ,@("py", "-3")
+foreach ($c in $cands) {
     try { & $c[0] $c[1..9] -c "import sys; assert sys.version_info[:2] >= (3,10) and sys.maxsize > 2**32" 2>$null; if ($LASTEXITCODE -eq 0) { $py = $c; break } } catch {}
 }
 if (-not $py) { throw "Khong tim thay Python 3.10+ 64-bit. Cai tu https://www.python.org/downloads/ (tick 'Add python.exe to PATH')." }
+Note ("Python dung de build: " + (& $py[0] $py[1..9] -c "import sys; print(sys.version.split()[0], sys.executable)"))
 $venv = Join-Path $work "venv"
 if (-not (Test-Path "$venv\Scripts\python.exe")) { & $py[0] $py[1..9] -m venv $venv }
 $vpy = "$venv\Scripts\python.exe"

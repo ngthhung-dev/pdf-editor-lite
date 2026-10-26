@@ -232,7 +232,8 @@ jobs:
           mkdir out; find art -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.pkg' \) -exec cp {} out/ \;
           ls -la out; echo "n=$(ls out | wc -l)" >> "$GITHUB_OUTPUT"
       - name: Publish release
-        if: steps.files.outputs.n != '0'
+        # chi phat hanh khi CA BA he dieu hanh deu build xong: thieu ban nao thi khong dang ban thieu
+        if: steps.files.outputs.n != '0' && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VER }}
