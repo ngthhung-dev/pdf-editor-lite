@@ -1300,7 +1300,8 @@ class Viewer(QGraphicsView):
             self.sel_rects, self.sel_text = [], ""
             self.sel_image = None
             if not self._words(i) and not (self.tool == "select" and self._images(i)):
-                self.message.emit("Trang này không có lớp chữ (có thể là bản scan). Dùng Chuyển đổi → OCR trước.")
+                self.message.emit("Trang này không có chữ thật: chữ chỉ là ảnh hoặc nét vẽ (bản scan, hoặc file in ra PDF bằng "
+                                  "“Microsoft Print to PDF”). Chạy Chuyển đổi → Nhận dạng chữ (OCR) để chọn và sao chép được.")
         self.viewport().update()
 
     def mouseMoveEvent(self, e):

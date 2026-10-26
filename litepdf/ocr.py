@@ -424,6 +424,20 @@ def run(data: bytes, engine: str, opts: dict, progress=None, note=None, cancel=N
                 if only_scans and has_text(page):
                     out.insert_pdf(doc, from_page=i, to_page=i)
                     stats["skipped"] += 1
+                elif not page.get_images() and not page.rotation:
+                    # Trang toàn nét vẽ (chữ bị đổi thành hình, vd. in ra PDF bằng "Microsoft Print to PDF"): giữ nguyên
+                    # trang gốc sắc nét, chỉ đặt thêm lớp chữ ẩn để chọn / tìm / sao chép được.
+                    pix = _render(page, dpi)
+                    try:
+                        lines = tess_lines(pix, opts.get("lang", "eng"))
+                    except Exception as e:
+                        raise OcrError(f"OCR lỗi ở trang {i + 1}: {e}")
+                    n = add_text_layer(page, lines, 72.0 / dpi)
+                    out.insert_pdf(doc, from_page=i, to_page=i)
+                    stats["pages"] += 1
+                    stats["lines"] += n
+                    if not n:
+                        stats["empty"].append(i)
                 else:
                     pix = _render(page, dpi)
                     try:
