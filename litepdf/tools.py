@@ -2417,6 +2417,69 @@ def _drop_cjk_spaces(chars: list, owners: list | None = None):
     return [chars[i] for i in keep], ([owners[i] for i in keep] if owners is not None else None)
 
 
+def ocr_page_words(page, lang: str, dpi: int = 300) -> list:
+    """Nhận dạng chữ của trang bằng Tesseract (không sửa trang). Trả về danh sách từ giống page.get_text("words"),
+    toạ độ theo trang gốc."""
+    td = find_tessdata()
+    if not td:
+        return []
+    pix = page.get_pixmap(dpi=dpi, alpha=False)
+    one = pymupdf.open("pdf", pix.pdfocr_tobytes(language=lang, tessdata=td))
+    try:
+        op = one[0]
+        # trang OCR có cỡ đúng bằng trang đang hiển thị (đã xoay nếu trang có xoay): đổi về toạ độ trang gốc
+        kx = page.rect.width / max(1e-6, op.rect.width)
+        ky = page.rect.height / max(1e-6, op.rect.height)
+        m = page.derotation_matrix if page.rotation else None
+        out = []
+        for w in op.get_text("words"):
+            r = pymupdf.Rect(w[0] * kx, w[1] * ky, w[2] * kx, w[3] * ky)
+            if m is not None:
+                r = (r * m).normalize()
+            out.append((r.x0, r.y0, r.x1, r.y1) + tuple(w[4:]))
+        return out
+    finally:
+        one.close()
+
+
+def search_words(words: list, query: str) -> list:
+    """Như search_page nhưng tìm trong danh sách từ (vd. chữ tự nhận dạng bằng OCR)."""
+    plain = _fold(query, True) == _fold(query, False)
+    q = " ".join(_fold(query, plain).split())
+    if not q:
+        return []
+    cjk = any(_is_cjk(c) for c in q)
+    if cjk:
+        q = "".join(_drop_cjk_spaces(list(q))[0])
+    flat, own = [], []
+    for k, w in enumerate(words):
+        if flat:
+            flat.append(" ")
+            own.append(-1)
+        for c in _fold(w[4], plain):
+            flat.append(c)
+            own.append(k)
+    if cjk:
+        flat, own = _drop_cjk_spaces(flat, own)
+    hay = "".join(flat)
+    out, start = [], 0
+    while True:
+        k = hay.find(q, start)
+        if k < 0:
+            break
+        start = k + 1
+        groups: dict = {}
+        for o in own[k:k + len(q)]:
+            if o < 0:
+                continue
+            w = words[o]
+            key = (w[5], w[6]) if len(w) > 6 else 0
+            r = pymupdf.Rect(w[:4])
+            groups[key] = groups[key] | r if key in groups else r
+        out += list(groups.values())
+    return out
+
+
 def search_page(page, query: str) -> list:
     """Tìm `query` trong trang, trả về các khung chữ nhật (mỗi dòng của một kết quả một khung).
     Khác search_for của MuPDF (chỉ không phân biệt hoa thường với chữ không dấu): "đại việt" tìm ra "ĐẠI VIỆT".

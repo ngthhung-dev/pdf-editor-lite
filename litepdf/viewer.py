@@ -13,7 +13,7 @@ import pymupdf
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QColor, QDesktopServices, QGuiApplication, QImage, QPainter, QPen, QPolygonF,
                            QTransform)
-from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QInputDialog, QMenu, QMessageBox, QToolTip
+from PySide6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView, QInputDialog, QMenu, QMessageBox, QToolTip
 
 from . import tools
 from .icons import icon, icon_for
@@ -362,6 +362,21 @@ class DocModel(QObject):
         self._work = None
 
 
+# Tự nhận dạng chữ (OCR ngầm bằng Tesseract) cho trang không có chữ thật, như Edge / Chrome / Acrobat:
+# chỉ để chọn, sao chép và tìm kiếm ngay trong app, không ghi gì vào file. App đặt "lang" theo lựa chọn OCR gần nhất.
+AUTO_OCR = {"on": True, "lang": None, "max_search_pages": 60}
+
+
+def _auto_ocr_lang():
+    langs = tools.tess_languages()
+    if not langs:
+        return None
+    want = AUTO_OCR.get("lang")
+    if want and set(want.split("+")) <= set(langs):
+        return want
+    return "vie+eng" if {"vie", "eng"} <= set(langs) else "+".join(langs[:2])
+
+
 class Viewer(QGraphicsView):
     pageChanged = Signal(int)
     zoomChanged = Signal(float)
@@ -390,6 +405,8 @@ class Viewer(QGraphicsView):
         self.tops: list[float] = []
         self.cache: dict[int, tuple[float, QImage]] = {}
         self.words: dict[int, list] = {}
+        self.ocr_done: set[int] = set()          # trang đã tự nhận dạng chữ (đã thử, có hay không có kết quả)
+        self.ocr_found: set[int] = set()         # trong đó: trang có chữ nhận dạng được
         self.imgs: dict[int, list] = {}
         self.notes: dict[int, list] = {}     # ghi chú có nội dung trên từng trang (để hiện khi rê chuột)
         self._note_tip = None
@@ -459,6 +476,8 @@ class Viewer(QGraphicsView):
         self.scene().setSceneRect(0, 0, maxw + 2 * MARGIN, max(y - GAP + MARGIN, 10))
         self.cache.clear()
         self.words.clear()
+        self.ocr_done.clear()
+        self.ocr_found.clear()
         self.imgs.clear()
         self.notes.clear()
         self.dicts.clear()
@@ -484,6 +503,8 @@ class Viewer(QGraphicsView):
                 self._scan, self._scan_pos = [], 0
             self.cache.pop(page, None)
             self.words.pop(page, None)
+            self.ocr_done.discard(page)
+            self.ocr_found.discard(page)
             self.imgs.pop(page, None)
             self.notes.pop(page, None)
             self.dicts.pop(page, None)
@@ -855,6 +876,40 @@ class Viewer(QGraphicsView):
         if i not in self.words:
             self.words[i] = tools.page_words(self.model.doc[i])
         return self.words[i]
+
+    def _can_auto_ocr(self, i: int) -> bool:
+        """Trang không có chữ thật nhưng có hình hoặc nét vẽ (bản scan, file in bằng Microsoft Print to PDF…)."""
+        if not AUTO_OCR.get("on") or i in self.ocr_done or self._words(i):
+            return False
+        page = self.model.doc[i]
+        try:
+            return bool(page.get_images()) or len(page.read_contents()) > 200
+        except Exception:
+            return False
+
+    def auto_ocr(self, i: int, quiet: bool = False) -> bool:
+        """Nhận dạng chữ trang i ngay (khoảng nửa giây đến vài giây). Trả về True nếu đọc được chữ."""
+        if not self._can_auto_ocr(i):
+            return i in self.ocr_found
+        lang = _auto_ocr_lang()
+        self.ocr_done.add(i)
+        if not lang:
+            return False
+        if not quiet:
+            self.message.emit(f"Đang tự nhận dạng chữ trang {i + 1}…")
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            QApplication.processEvents()
+        try:
+            ws = tools.ocr_page_words(self.model.doc[i], lang)
+        except Exception:
+            ws = []
+        finally:
+            if not quiet:
+                QApplication.restoreOverrideCursor()
+        if ws:
+            self.words[i] = ws
+            self.ocr_found.add(i)
+        return bool(ws)
 
     def _nearest_word(self, ws: list, pt: pymupdf.Point) -> int:
         best, bd = 0, 1e18
@@ -1299,7 +1354,10 @@ class Viewer(QGraphicsView):
         elif self.tool == "select" or self.tool in MARK_TOOLS:
             self.sel_rects, self.sel_text = [], ""
             self.sel_image = None
-            if not self._words(i) and not (self.tool == "select" and self._images(i)):
+            if not self._words(i) and self.auto_ocr(i):
+                self.message.emit("Trang này không có chữ thật (chữ là ảnh/nét vẽ): app đã tự nhận dạng để chọn, sao chép, "
+                                  "tìm kiếm. Muốn lưu lớp chữ vào file thì dùng Chuyển đổi → Nhận dạng chữ (OCR).")
+            elif not self._words(i) and not (self.tool == "select" and self._images(i)):
                 self.message.emit("Trang này không có chữ thật: chữ chỉ là ảnh hoặc nét vẽ (bản scan, hoặc file in ra PDF bằng "
                                   "“Microsoft Print to PDF”). Chạy Chuyển đổi → Nhận dạng chữ (OCR) để chọn và sao chép được.")
         self.viewport().update()
@@ -1722,7 +1780,13 @@ class Viewer(QGraphicsView):
             i = self._scan[self._scan_pos]
             self._scan_pos += 1
             try:
-                rs = tools.search_page(doc[i], self.query)
+                if i in self.ocr_found:
+                    rs = tools.search_words(self.words.get(i, []), self.query)
+                else:
+                    rs = tools.search_page(doc[i], self.query)
+                    if not rs and self.model.page_count <= AUTO_OCR.get("max_search_pages", 60) \
+                            and self._can_auto_ocr(i) and self.auto_ocr(i, quiet=True):
+                        rs = tools.search_words(self.words.get(i, []), self.query)
             except Exception:
                 rs = []
             if rs:

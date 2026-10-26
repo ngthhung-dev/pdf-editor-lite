@@ -898,6 +898,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.cfg = Config()
+        _ocr = self.cfg.get("ocr", {}) or {}
+        if _ocr.get("engine") == "tesseract" and _ocr.get("lang"):
+            from . import viewer as _v
+            _v.AUTO_OCR["lang"] = _ocr["lang"]
         self.setWindowTitle(APP_NAME)
         self.resize(DEFAULT_SIZE[0], DEFAULT_SIZE[1])
         self.setAcceptDrops(True)
@@ -2670,6 +2674,9 @@ class MainWindow(QMainWindow):
             return
         self.cfg.save()
         o = dlg.options()
+        if o["engine"] == "tesseract" and o.get("lang"):
+            from . import viewer as _v
+            _v.AUTO_OCR["lang"] = o["lang"]          # tự nhận dạng chữ khi chọn/tìm dùng cùng ngôn ngữ
         if o["engine"] == "tesseract" and not tools.tess_languages():
             return self._tesseract_help()
         sample = range(min(doc.page_count, 30))
