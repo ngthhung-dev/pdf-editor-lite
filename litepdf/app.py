@@ -898,6 +898,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.cfg = Config()
+        from . import viewer as _v0
+        _v0.AUTO_OCR["on"] = bool(self.cfg.get("auto_ocr", True))
         _ocr = self.cfg.get("ocr", {}) or {}
         if _ocr.get("engine") == "tesseract" and _ocr.get("lang"):
             from . import viewer as _v
@@ -1164,6 +1166,12 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         self.a_split = A("Tách file PDF…", self.split, None, "split", menu=m)
         A("Nhận dạng chữ (OCR) cho bản scan…", self.ocr, menu=m)
+        self.a_auto_ocr = A("Tự nhận dạng chữ khi kéo chọn / tìm trên trang scan", self._toggle_auto_ocr, doc=False,
+                            menu=m, guard=False,
+                            tip="Trang scan hoặc file in ra PDF (chữ là ảnh/nét vẽ): khi kéo chọn chữ hoặc tìm kiếm, app tự đọc "
+                                "chữ của trang đó (vài giây). Chỉ mở / xem file thì không chạy. Không sửa file.")
+        self.a_auto_ocr.setCheckable(True)
+        self.a_auto_ocr.setChecked(self.cfg.get("auto_ocr", True))
         A("Nén giảm dung lượng…", self.compress, menu=m)
         # --- Ký & bảo mật
         m = mb.addMenu("&Ký && Bảo mật")
@@ -2662,6 +2670,15 @@ class MainWindow(QMainWindow):
             return True
         self.error("Chưa cài được RapidOCR. Kiểm tra mạng rồi thử lại.\n\n" + box["out"][-900:])
         return False
+
+    def _toggle_auto_ocr(self, *_):
+        from . import viewer as _v
+        on = self.a_auto_ocr.isChecked()
+        _v.AUTO_OCR["on"] = on
+        self.cfg["auto_ocr"] = on
+        self.cfg.save()
+        self.msg("Đã bật tự nhận dạng chữ khi kéo chọn / tìm trên trang scan." if on else
+                 "Đã tắt tự nhận dạng chữ. Trang scan cần chạy Chuyển đổi → Nhận dạng chữ (OCR) mới chọn được chữ.")
 
     def ocr(self, t):
         from . import ocr

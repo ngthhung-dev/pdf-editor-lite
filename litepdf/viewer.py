@@ -881,11 +881,7 @@ class Viewer(QGraphicsView):
         """Trang không có chữ thật nhưng có hình hoặc nét vẽ (bản scan, file in bằng Microsoft Print to PDF…)."""
         if not AUTO_OCR.get("on") or i in self.ocr_done or self._words(i):
             return False
-        page = self.model.doc[i]
-        try:
-            return bool(page.get_images()) or len(page.read_contents()) > 200
-        except Exception:
-            return False
+        return tools.looks_like_text_image(self.model.doc[i])
 
     def auto_ocr(self, i: int, quiet: bool = False) -> bool:
         """Nhận dạng chữ trang i ngay (khoảng nửa giây đến vài giây). Trả về True nếu đọc được chữ."""
@@ -1354,10 +1350,7 @@ class Viewer(QGraphicsView):
         elif self.tool == "select" or self.tool in MARK_TOOLS:
             self.sel_rects, self.sel_text = [], ""
             self.sel_image = None
-            if not self._words(i) and self.auto_ocr(i):
-                self.message.emit("Trang này không có chữ thật (chữ là ảnh/nét vẽ): app đã tự nhận dạng để chọn, sao chép, "
-                                  "tìm kiếm. Muốn lưu lớp chữ vào file thì dùng Chuyển đổi → Nhận dạng chữ (OCR).")
-            elif not self._words(i) and not (self.tool == "select" and self._images(i)):
+            if not self._words(i) and not self._can_auto_ocr(i) and not (self.tool == "select" and self._images(i)):
                 self.message.emit("Trang này không có chữ thật: chữ chỉ là ảnh hoặc nét vẽ (bản scan, hoặc file in ra PDF bằng "
                                   "“Microsoft Print to PDF”). Chạy Chuyển đổi → Nhận dạng chữ (OCR) để chọn và sao chép được.")
         self.viewport().update()
@@ -1422,6 +1415,13 @@ class Viewer(QGraphicsView):
         if self.tool == "ink":
             self.ink.append(self._clamp_to_page(self.press_page, sp))
         elif self.tool == "select" or self.tool in MARK_TOOLS:
+            i = self.press_page
+            if i is not None and not self._words(i) and self._can_auto_ocr(i):
+                d = sp - self.press
+                if abs(d.x()) + abs(d.y()) > 6:          # đã kéo thật (không phải chỉ bấm): lúc này mới đọc chữ trang này
+                    if self.auto_ocr(i):
+                        self.message.emit("Trang này không có chữ thật (chữ là ảnh/nét vẽ): app đã tự nhận dạng để chọn, "
+                                          "sao chép, tìm kiếm. Muốn lưu lớp chữ vào file thì dùng Chuyển đổi → Nhận dạng chữ (OCR).")
             self._update_selection()
         self.viewport().update()
 

@@ -2417,6 +2417,29 @@ def _drop_cjk_spaces(chars: list, owners: list | None = None):
     return [chars[i] for i in keep], ([owners[i] for i in keep] if owners is not None else None)
 
 
+def looks_like_text_image(page) -> bool:
+    """Trang không có chữ thật nhưng nhiều khả năng chứa chữ dạng hình (đáng nhận dạng):
+    - bản scan / ảnh chụp: một ảnh phủ từ 50% diện tích trang trở lên;
+    - file "in ra PDF" (Microsoft Print to PDF…): chữ thành rất nhiều nét vẽ nhỏ.
+    Trang trắng, trang chỉ có vài hình minh hoạ hay vài đường kẻ thì bỏ qua."""
+    try:
+        area = abs(page.rect)
+        if area <= 0:
+            return False
+        for info in page.get_image_info():
+            r = pymupdf.Rect(info["bbox"]) & page.rect
+            if abs(r) >= 0.5 * area:
+                return True
+        # đếm nhanh số lệnh tô hình trong nội dung trang (chữ bị đổi thành hình: hàng trăm lệnh "f")
+        data = page.read_contents()
+        if len(data) < 2000:
+            return False
+        fills = data.count(b"\nf\n") + data.count(b"\nf*\n") + data.count(b" f\n") + data.count(b" f*\n")
+        return fills >= 80
+    except Exception:
+        return False
+
+
 def ocr_page_words(page, lang: str, dpi: int = 300) -> list:
     """Nhận dạng chữ của trang bằng Tesseract (không sửa trang). Trả về danh sách từ giống page.get_text("words"),
     toạ độ theo trang gốc."""
