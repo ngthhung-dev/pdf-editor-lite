@@ -2417,6 +2417,40 @@ def _drop_cjk_spaces(chars: list, owners: list | None = None):
     return [chars[i] for i in keep], ([owners[i] for i in keep] if owners is not None else None)
 
 
+def reading_order(words: list) -> list:
+    """Xếp các từ theo thứ tự mắt đọc: từ trên xuống từng dòng nhìn thấy, trong dòng từ trái sang phải.
+    Thứ tự lưu trong file thì tuỳ phần mềm tạo (bảng hay bị ghi theo cột, ô sau ghi trước...), nên quét chọn theo
+    thứ tự đó sẽ nhảy lung tung. Trả về [(x0, y0, x1, y1, chữ, dòng, đoạn, thứ tự)]: "đoạn" tách các cụm cách xa
+    nhau trên cùng dòng (các ô của một hàng bảng)."""
+    items = sorted(words, key=lambda w: ((w[1] + w[3]) / 2, w[0]))
+    lines: list[list] = []
+    for w in items:
+        h = max(0.1, w[3] - w[1])
+        cy = (w[1] + w[3]) / 2
+        placed = False
+        for ln in reversed(lines[-3:]):          # chỉ so với vài dòng gần nhất (đã xếp theo chiều dọc)
+            y0, y1 = ln[0], ln[1]
+            ov = min(y1, w[3]) - max(y0, w[1])
+            if ov >= 0.5 * min(h, y1 - y0) and abs(cy - (y0 + y1) / 2) < 0.6 * max(h, y1 - y0):
+                ln[2].append(w)
+                ln[0], ln[1] = min(y0, w[1]), max(y1, w[3])
+                placed = True
+                break
+        if not placed:
+            lines.append([w[1], w[3], [w]])
+    lines.sort(key=lambda ln: (ln[0] + ln[1]) / 2)
+    out = []
+    for li, (_y0, _y1, ws) in enumerate(lines):
+        ws.sort(key=lambda w: w[0])
+        seg, prev = 0, None
+        for k, w in enumerate(ws):
+            if prev is not None and w[0] - prev[2] > 1.5 * max(prev[3] - prev[1], w[3] - w[1]):
+                seg += 1
+            out.append((w[0], w[1], w[2], w[3], w[4], li, seg, k))
+            prev = w
+    return out
+
+
 def looks_like_text_image(page) -> bool:
     """Trang không có chữ thật nhưng nhiều khả năng chứa chữ dạng hình (đáng nhận dạng):
     - bản scan / ảnh chụp: một ảnh phủ từ 50% diện tích trang trở lên;

@@ -405,6 +405,7 @@ class Viewer(QGraphicsView):
         self.tops: list[float] = []
         self.cache: dict[int, tuple[float, QImage]] = {}
         self.words: dict[int, list] = {}
+        self._rorder: dict[int, tuple] = {}      # trang -> (danh sách từ gốc, các từ xếp theo thứ tự mắt đọc)
         self.ocr_done: set[int] = set()          # trang đã tự nhận dạng chữ (đã thử, có hay không có kết quả)
         self.ocr_found: set[int] = set()         # trong đó: trang có chữ nhận dạng được
         self.imgs: dict[int, list] = {}
@@ -925,18 +926,26 @@ class Viewer(QGraphicsView):
         if not ws:
             self.sel_rects, self.sel_text = [], ""
             return
+        cached = self._rorder.get(i)
+        if cached is None or cached[0] is not ws:      # thứ tự mắt đọc của trang (tính một lần, đổi khi chữ trang đổi)
+            cached = (ws, tools.reading_order(ws))
+            self._rorder[i] = cached
+        ws = cached[1]
         a = self._nearest_word(ws, self.to_page(i, self.press))
         b = self._nearest_word(ws, self.to_page(i, self.cur))
         a, b = min(a, b), max(a, b)
-        lines: dict[tuple, list] = {}
+        lines: dict[int, dict[int, list]] = {}
         for w in ws[a:b + 1]:
-            lines.setdefault((w[5], w[6]), []).append(w)
+            lines.setdefault(w[5], {}).setdefault(w[6], []).append(w)
         rects, texts = [], []
-        for key in lines:
-            l = lines[key]
-            rects.append(pymupdf.Rect(min(w[0] for w in l), min(w[1] for w in l), max(w[2] for w in l),
-                                      max(w[3] for w in l)))
-            texts.append(" ".join(w[4] for w in l))
+        for li in sorted(lines):
+            parts = []
+            for sg in sorted(lines[li]):
+                l = lines[li][sg]
+                rects.append(pymupdf.Rect(min(w[0] for w in l), min(w[1] for w in l), max(w[2] for w in l),
+                                          max(w[3] for w in l)))
+                parts.append(" ".join(w[4] for w in l))
+            texts.append("\t".join(parts))      # các ô cách xa trên cùng dòng: ngăn bằng Tab (dán vào Excel đúng cột)
         self.sel_page, self.sel_rects, self.sel_text = i, rects, "\n".join(texts)
 
     # ------------------------------------------------------------ chọn hình ảnh
