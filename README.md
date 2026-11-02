@@ -22,6 +22,7 @@ Số sau chữ `build` là số bản: số càng lớn thì bản càng mới. 
 
 **Xem và đọc**
 - Mở nhiều file theo tab; nhấp đúp file PDF khác khi app đang mở sẽ thêm tab trong cùng cửa sổ.
+- Kéo thả tab như Chrome / Edge: kéo tab ra khỏi thanh tab rồi thả ra chỗ trống để tách thành cửa sổ mới; kéo tab thả vào cửa sổ PDF Editor Lite khác để gộp thành tab của cửa sổ đó. Chuột phải vào tab: chuyển sang cửa sổ mới / cửa sổ khác.
 - Thu phóng, vừa chiều rộng / vừa trang, toàn màn hình, thanh bên hình thu nhỏ trang và bookmark.
 - Tìm chữ trong tài liệu (F3 / Shift+F3), sao chép chữ và hình ảnh.
 
