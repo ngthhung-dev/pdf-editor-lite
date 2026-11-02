@@ -8,13 +8,14 @@ import tempfile
 from pathlib import Path
 
 import pymupdf
-from PySide6.QtCore import QEvent, QEventLoop, QObject, QPoint, QPointF, QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import (QAction, QActionGroup, QColor, QCursor, QIcon, QImage, QKeySequence, QPainter, QPalette, QPixmap)
+from PySide6.QtCore import QEvent, QEventLoop, QMimeData, QObject, QPoint, QPointF, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import (QAction, QActionGroup, QColor, QCursor, QDrag, QIcon, QImage, QKeySequence, QMouseEvent, QPainter,
+                           QPalette, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QColorDialog, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout,
                                QFileDialog, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMainWindow, QMessageBox, QProgressDialog, QSizePolicy, QSpinBox,
-                               QSplitter, QSplitterHandle, QStackedWidget, QTabWidget, QToolBar, QToolButton, QVBoxLayout,
-                               QWidget)
+                               QMainWindow, QMenu, QMessageBox, QProgressDialog, QSizePolicy, QSpinBox,
+                               QSplitter, QSplitterHandle, QStackedWidget, QTabBar, QTabWidget, QToolBar, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from . import tools
 from .dialogs import (Config, ImagesToPdfDialog, MergeDialog, ReportDialog, SplitDialog, SignatureLibrary, SignDialog, form_dialog, trust_dir)
@@ -157,7 +158,8 @@ class DocTab(QWidget):
         self.thumbs = ThumbList()
         self.bookmarks = BookmarkPanel(model, self.own_viewer, main.cfg)
         self.bookmarks.host = (main, self)
-        self.bookmarks.hide_side = lambda: (self.side.setVisible(False), main._side_label())
+        # tab có thể được kéo sang cửa sổ khác: luôn gọi tới cửa sổ đang chứa tab (self.main), không giữ cửa sổ cũ
+        self.bookmarks.hide_side = lambda: (self.side.setVisible(False), self.main._side_label())
         self.side = QTabWidget()
         self.side.setDocumentMode(True)
         self.side.addTab(self.thumbs, "Trang")
@@ -215,7 +217,7 @@ class DocTab(QWidget):
         self.thumbs.itemClicked.connect(lambda it: self.goto_both(self.thumbs.row(it)))
         self.thumbs.reordered.connect(self._reorder)
         self.thumbs.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.thumbs.customContextMenuRequested.connect(lambda pos: main.page_menu.exec(self.thumbs.mapToGlobal(pos)))
+        self.thumbs.customContextMenuRequested.connect(lambda pos: self.main.page_menu.exec(self.thumbs.mapToGlobal(pos)))
         self.own_viewer.pageChanged.connect(self._sync_thumb)
         model.changed.connect(self._on_changed)
         self.rebuild()
@@ -894,10 +896,61 @@ class FindBar(QFrame):
         return False
 
 
-class MainWindow(QMainWindow):
-    def __init__(self):
+TAB_MIME = "application/x-litepdf-tab"
+_WINDOWS: list["MainWindow"] = []       # các cửa sổ đang có, cửa sổ vừa dùng gần nhất nằm cuối
+_DRAG: dict = {}                        # tab đang được kéo ra khỏi thanh tab và nơi nó được thả
+
+
+def active_window() -> "MainWindow | None":
+    """Cửa sổ nên nhận file mới mở (nhấp đúp file, kéo vào biểu tượng app): cửa sổ đang dùng hoặc vừa dùng gần nhất."""
+    w = QApplication.activeWindow()
+    if isinstance(w, MainWindow):
+        return w
+    for w in reversed(_WINDOWS):
+        if w.isVisible():
+            return w
+    return next((w for w in _WINDOWS if w._primary), None)
+
+
+class DragTabBar(QTabBar):
+    """Thanh tab như trình duyệt: kéo trong thanh để đổi thứ tự; kéo ra khỏi thanh rồi thả ra chỗ trống thì tách thành
+    cửa sổ mới, thả vào cửa sổ PDF Editor Lite khác thì thành tab của cửa sổ đó."""
+
+    def __init__(self, main: "MainWindow"):
         super().__init__()
-        self.cfg = Config()
+        self.main = main
+        self._tab = None                # tab vừa được nhấn chuột (có thể sắp bị kéo ra ngoài)
+
+    def mousePressEvent(self, e):
+        self._tab = None
+        if e.button() == Qt.LeftButton:
+            i = self.tabAt(e.position().toPoint())
+            if i >= 0:
+                self._tab = self.main.tabs.widget(i)
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._tab is not None and e.buttons() & Qt.LeftButton:
+            if not self.rect().adjusted(-40, -30, 40, 30).contains(e.position().toPoint()):
+                t, self._tab = self._tab, None
+                # kết thúc việc kéo đổi chỗ đang dở trong thanh tab rồi mới kéo tab sang nơi khác
+                super().mouseReleaseEvent(QMouseEvent(QEvent.MouseButtonRelease, e.position(), e.globalPosition(),
+                                                      Qt.LeftButton, Qt.NoButton, e.modifiers()))
+                self.main.drag_tab(t)
+                return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        self._tab = None
+        super().mouseReleaseEvent(e)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, cfg: Config | None = None):
+        super().__init__()
+        self.cfg = cfg if cfg is not None else Config()     # các cửa sổ tách ra dùng chung thiết lập với cửa sổ chính
+        self._primary = False           # cửa sổ đầu tiên (giữ kênh nhận file, biểu tượng khay); cửa sổ tách ra thì không
+        _WINDOWS.append(self)
         from . import viewer as _v0
         _v0.AUTO_OCR["on"] = bool(self.cfg.get("auto_ocr", True))
         _ocr = self.cfg.get("ocr", {}) or {}
@@ -908,6 +961,9 @@ class MainWindow(QMainWindow):
         self.resize(DEFAULT_SIZE[0], DEFAULT_SIZE[1])
         self.setAcceptDrops(True)
         self.tabs = QTabWidget()
+        self.tabs.setTabBar(DragTabBar(self))
+        self.tabs.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tabs.tabBar().customContextMenuRequested.connect(self._tab_menu)
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.setDocumentMode(True)
@@ -1527,12 +1583,13 @@ class MainWindow(QMainWindow):
         t = DocTab(model, self)
         v = t.own_viewer
         self.wire_viewer(t, v)
-        model.stateChanged.connect(self._update_ui)
+        # Tab có thể bị kéo sang cửa sổ khác: các tín hiệu luôn gọi tới cửa sổ đang chứa tab (t.main) lúc đó
+        model.stateChanged.connect(lambda: t.main._update_ui())
         model.changed.connect(lambda *_: setattr(model, "_has_annot", None))
         def refresh(*_):
             try:
-                if self.tab() is t:
-                    self._dim_unavailable()
+                if t.main.tab() is t:
+                    t.main._dim_unavailable()
             except RuntimeError:      # cửa sổ đang đóng: các thành phần giao diện đã bị huỷ
                 pass
         t.bookmarks.tree.currentItemChanged.connect(refresh)
@@ -1546,13 +1603,14 @@ class MainWindow(QMainWindow):
         return t
 
     def wire_viewer(self, t: DocTab, v: Viewer):
-        v.message.connect(self.msg)
-        v.searchChanged.connect(lambda s_: self._search_status(s_) if self.tab() is t and t.viewer is v else None)
-        v.pageChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
-        v.zoomChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
-        v.toolChanged.connect(lambda *_: self._update_ui() if self.tab() is t and t.viewer is v else None)
-        v.signRequested.connect(lambda pg, rect: self.guard(lambda: self.do_sign(t, pg, rect))())
-        v.selectionChanged.connect(lambda *_: self._dim_unavailable() if self.tab() is t and t.viewer is v else None)
+        cur = lambda: t.main.tab() is t and t.viewer is v      # noqa: E731  (t.main: cửa sổ đang chứa tab lúc đó)
+        v.message.connect(lambda s_: t.main.msg(s_))
+        v.searchChanged.connect(lambda s_: t.main._search_status(s_) if cur() else None)
+        v.pageChanged.connect(lambda *_: t.main._update_ui() if cur() else None)
+        v.zoomChanged.connect(lambda *_: t.main._update_ui() if cur() else None)
+        v.toolChanged.connect(lambda *_: t.main._update_ui() if cur() else None)
+        v.signRequested.connect(lambda pg, rect: t.main.guard(lambda: t.main.do_sign(t, pg, rect))())
+        v.selectionChanged.connect(lambda *_: t.main._dim_unavailable() if cur() else None)
 
     # ---------------------------------------------------------------- so sánh song song
     def doc_tabs(self) -> list[DocTab]:
@@ -1628,11 +1686,14 @@ class MainWindow(QMainWindow):
         if not os.path.isfile(path):
             self.error(f"Không tìm thấy file:\n{path}")
             return None
-        for i in range(self.tabs.count()):
-            w = self.tabs.widget(i)
-            if w.own_model.path and os.path.normcase(w.own_model.path) == os.path.normcase(path):
-                self.tabs.setCurrentIndex(i)
-                return w
+        for win in [self] + [x for x in _WINDOWS if x is not self]:    # file đã mở ở cửa sổ nào thì chuyển tới tab đó
+            for i in range(win.tabs.count()):
+                w = win.tabs.widget(i)
+                if w.own_model.path and os.path.normcase(w.own_model.path) == os.path.normcase(path):
+                    win.tabs.setCurrentIndex(i)
+                    if win is not self:
+                        win.bring_up()
+                    return w
         self.cfg["last_dir"] = os.path.dirname(path)
         ext = Path(path).suffix.lower()
         self.busy()
@@ -1729,8 +1790,8 @@ class MainWindow(QMainWindow):
         if not force and not self.maybe_save(t):
             return
         t.stop_compare()
-        for x in self.doc_tabs():                # tab khác đang so sánh với tài liệu này: tắt so sánh trước khi đóng
-            if x.partner_tab is t:
+        for x in [x for w in _WINDOWS for x in w.doc_tabs()]:   # tab khác (cả ở cửa sổ khác) đang so sánh với tài liệu
+            if x.partner_tab is t:                               # này: tắt so sánh trước khi đóng
                 x.stop_compare()
             if x.source_tab is t:
                 x.source_tab = None
@@ -1746,6 +1807,15 @@ class MainWindow(QMainWindow):
                 e.ignore()
                 return
         self.cfg.save()
+        if not self._primary:            # cửa sổ tách ra: đóng hẳn, đóng luôn các tài liệu của nó
+            for i in range(self.tabs.count() - 1, -1, -1):
+                self.close_tab(i, force=True)
+            if getattr(self, "find_bar", None) is not None:
+                self.find_bar.hide()
+            if self in _WINDOWS:
+                _WINDOWS.remove(self)
+            e.accept()
+            return
         if getattr(self, "_resident", False) and not getattr(self, "_quitting", False):
             # khởi động nhanh: đóng các tab, ẩn cửa sổ, app vẫn chạy nền để lần mở sau hiện ngay
             for i in range(self.tabs.count() - 1, -1, -1):
@@ -1796,16 +1866,25 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def quit_app(self) -> None:
-        self._quitting = True
-        if self.close():
-            tray = getattr(self, "_tray", None)
+        for w in [x for x in _WINDOWS if not x._primary]:      # đóng các cửa sổ tách ra trước (hỏi lưu từng tài liệu)
+            if not w.close():
+                return
+        main = next((x for x in _WINDOWS if x._primary), self)
+        main._quitting = True
+        if main.close():
+            tray = getattr(main, "_tray", None)
             if tray is not None:
                 tray.hide()
             QApplication.instance().quit()
         else:
-            self._quitting = False
+            main._quitting = False
 
     def set_fast_start(self, on: bool) -> None:
+        main = next((x for x in _WINDOWS if x._primary), self)
+        if main is not self:             # biểu tượng khay và chế độ chạy nền thuộc về cửa sổ chính
+            return main.set_fast_start(on)
+        for w in _WINDOWS:
+            w.a_fast.setChecked(on)
         from . import faststart
         try:
             faststart.set_enabled(on)
@@ -1828,11 +1907,121 @@ class MainWindow(QMainWindow):
             QApplication.instance().setQuitOnLastWindowClosed(True)
             self.msg("Đã tắt khởi động nhanh.")
 
+    def changeEvent(self, e):
+        if e.type() == QEvent.ActivationChange and self.isActiveWindow() and self in _WINDOWS:
+            _WINDOWS.remove(self)        # cửa sổ vừa dùng nằm cuối danh sách: file mở sau sẽ vào cửa sổ này
+            _WINDOWS.append(self)
+        super().changeEvent(e)
+
+    # ---------------------------------------------------------------- kéo tab giữa các cửa sổ
+    def drag_tab(self, t: DocTab) -> None:
+        """Kéo tab ra khỏi thanh tab (như Chrome/Edge): thả vào cửa sổ PDF Editor Lite khác thì thành tab của cửa sổ đó,
+        thả ra chỗ trống thì tách thành cửa sổ mới ngay chỗ thả."""
+        if self.tabs.indexOf(t) < 0:
+            return
+        mime = QMimeData()
+        mime.setData(TAB_MIME, b"1")
+        drag = QDrag(self.tabs.tabBar())
+        drag.setMimeData(mime)
+        pix = t.grab()
+        if not pix.isNull():
+            pix = pix.scaled(360, 240, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            drag.setPixmap(pix)
+            drag.setHotSpot(QPoint(pix.width() // 2, 12))
+        _DRAG.clear()
+        _DRAG["tab"] = t
+        try:
+            drag.exec(Qt.MoveAction)
+            dest, index = _DRAG.get("dest"), _DRAG.get("index", -1)
+        finally:
+            _DRAG.clear()
+        # chuyển tab sau khi kéo thả đã xong hẳn (không làm trong lúc thả, khi thanh tab nguồn vẫn đang xử lý chuột)
+        if dest is not None:
+            self.move_tab(t, dest, index)
+            if dest is not self:
+                dest.bring_up()
+        else:
+            self.detach_tab(t, QCursor.pos())
+
+    def detach_tab(self, t: DocTab, pos: QPoint | None = None) -> None:
+        """Tách tab ra thành cửa sổ riêng. Cửa sổ chỉ có một tab thì chỉ dời cửa sổ tới chỗ thả."""
+        size = self.normalGeometry().size() if self.isMaximized() or self.isFullScreen() else self.size()
+        if self.tabs.count() <= 1:
+            if pos is not None and not (self.isMaximized() or self.isFullScreen()):
+                self.move(pos - QPoint(size.width() // 2, 15))
+            return
+        w = MainWindow(self.cfg)
+        w.setAttribute(Qt.WA_DeleteOnClose)
+        w.a_fast.setChecked(self.a_fast.isChecked())
+        w.resize(size)
+        w.move(pos - QPoint(size.width() // 2, 15) if pos is not None else self.pos() + QPoint(40, 40))
+        w.show()
+        self.move_tab(t, w)
+        w.raise_()
+        w.activateWindow()
+
+    def move_tab(self, t: DocTab, dest: "MainWindow", index: int = -1) -> None:
+        """Chuyển tab t sang cửa sổ dest (vị trí index, -1 = cuối), giữ nguyên tài liệu và các thay đổi chưa lưu."""
+        i = self.tabs.indexOf(t)
+        if i < 0:
+            return
+        if dest is self:                         # thả lại vào chính cửa sổ này: chỉ đổi chỗ trong thanh tab
+            if index > i:
+                index -= 1
+            if 0 <= index < self.tabs.count() and index != i:
+                self.tabs.tabBar().moveTab(i, index)
+            return
+        t.stop_compare()                         # so sánh song song chỉ chạy giữa hai tab cùng một cửa sổ
+        for x in self.doc_tabs():
+            if x.partner_tab is t:
+                x.stop_compare()
+        text, tip = self.tabs.tabText(i), self.tabs.tabToolTip(i)
+        self.tabs.removeTab(i)
+        t.main = dest
+        t.bookmarks.host = (dest, t)
+        if not 0 <= index <= dest.tabs.count():
+            index = dest.tabs.count()
+        j = dest.tabs.insertTab(index, t, text)
+        dest.tabs.setTabToolTip(j, tip)
+        dest.tabs.setCurrentIndex(j)
+        dest._update_ui()
+        self._update_ui()
+        if not self.tabs.count() and any(w is not self and w.isVisible() for w in _WINDOWS):
+            QTimer.singleShot(0, self, self.close)       # đã kéo hết tab đi: đóng cửa sổ trống (như trình duyệt)
+
+    def _tab_menu(self, pos: QPoint) -> None:
+        bar = self.tabs.tabBar()
+        i = bar.tabAt(pos)
+        if i < 0:
+            return
+        t = self.tabs.widget(i)
+        m = QMenu(self)
+        m.addAction("Chuyển sang cửa sổ mới", lambda: self.detach_tab(t)).setEnabled(self.tabs.count() > 1)
+        others = [w for w in _WINDOWS if w is not self and w.isVisible()]
+        if others:
+            sub = m.addMenu("Chuyển sang cửa sổ khác")
+            for w in others:
+                sub.addAction(w.windowTitle(), lambda w=w: (self.move_tab(t, w), w.bring_up()))
+        m.addSeparator()
+        m.addAction("Đóng tab", lambda: self.close_tab(self.tabs.indexOf(t)))
+        m.exec(bar.mapToGlobal(pos))
+
     def dragEnterEvent(self, e):
-        if e.mimeData().hasUrls():
+        if e.mimeData().hasUrls() or (e.mimeData().hasFormat(TAB_MIME) and _DRAG.get("tab") is not None):
             e.acceptProposedAction()
 
     def dropEvent(self, e):
+        if e.mimeData().hasFormat(TAB_MIME):     # tab kéo từ cửa sổ khác (hoặc từ chính cửa sổ này) thả vào đây
+            if _DRAG.get("tab") is None:
+                return
+            bar = self.tabs.tabBar()
+            p = bar.mapFrom(self, e.position().toPoint())
+            index = bar.tabAt(p) if self.tabs.count() and bar.rect().adjusted(0, -20, 0, 20).contains(p) else -1
+            if index >= 0 and p.x() > bar.tabRect(index).center().x():
+                index += 1
+            _DRAG["dest"], _DRAG["index"] = self, index
+            e.acceptProposedAction()
+            return
         for u in e.mimeData().urls():
             if u.isLocalFile():
                 self.open_path(u.toLocalFile())
@@ -3064,11 +3253,12 @@ def listen_for_files(win) -> None:
             conn.write(b"ok")
             conn.flush()
             conn.disconnectFromServer()
-            win.bring_up()
-            win.activateWindow()
+            w = active_window() or win          # nhiều cửa sổ: mở vào cửa sổ đang dùng / vừa dùng gần nhất
+            w.bring_up()
+            w.activateWindow()
             for f in files:
                 if os.path.exists(f):
-                    win.guard(lambda f=f: win.open_path(f))()
+                    w.guard(lambda f=f: w.open_path(f))()
         conn.readyRead.connect(read)
     server.newConnection.connect(incoming)
     win._instance_server = server
@@ -3136,6 +3326,7 @@ def start(app, files: list[str], lock, splash=None, background: bool = False) ->
                       "QToolButton:checked{background:#d2e3fc;} QStatusBar{color:#3c4043;}"
                       "QMenu::item:disabled{color:#b4b9c0;} QToolButton:disabled{color:#b4b9c0;}")
     win = MainWindow()
+    win._primary = True
     launch.mark("mainwindow")
     win.place_centered()
     win.setup_resident(background)
@@ -3154,9 +3345,10 @@ def start(app, files: list[str], lock, splash=None, background: bool = False) ->
         class _FileOpen(QObject):
             def eventFilter(self, obj, ev):
                 if ev.type() == QEvent.FileOpen and ev.file():
-                    win.open_path(ev.file())
-                    win.raise_()
-                    win.activateWindow()
+                    w = active_window() or win
+                    w.open_path(ev.file())
+                    w.raise_()
+                    w.activateWindow()
                     return True
                 return False
         app._file_open = _FileOpen(app)
