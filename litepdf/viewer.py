@@ -409,6 +409,8 @@ class Viewer(QGraphicsView):
         self.ocr_done: set[int] = set()          # trang đã tự nhận dạng chữ (đã thử, có hay không có kết quả)
         self.ocr_found: set[int] = set()         # trong đó: trang có chữ nhận dạng được
         self.imgs: dict[int, list] = {}
+        self.gfx: dict[int, list] = {}       # hình vẽ bằng nét (mã vạch, mã QR…) chọn được như hình ảnh
+        self.sel_anchor = None               # (trang, điểm trên trang) chỗ bắt đầu quét chọn chữ: Shift+bấm để chọn tiếp
         self.notes: dict[int, list] = {}     # ghi chú có nội dung trên từng trang (để hiện khi rê chuột)
         self._note_tip = None
         self.sel_image = None      # (trang, thông tin ảnh) khi đang chọn một hình ảnh gốc
@@ -480,6 +482,7 @@ class Viewer(QGraphicsView):
         self.ocr_done.clear()
         self.ocr_found.clear()
         self.imgs.clear()
+        self.gfx.clear()
         self.notes.clear()
         self.dicts.clear()
         self.viewport().update()
@@ -489,6 +492,7 @@ class Viewer(QGraphicsView):
             return
         self.sel_image = None
         self.sel_rects, self.sel_text, self.hover_run = [], "", None
+        self.sel_anchor = None
         if structure or page is None:
             self.annot = None
             self._reset_search()                 # trang đã đổi: kết quả tìm cũ không còn đúng, lần tìm sau dò lại
@@ -507,6 +511,7 @@ class Viewer(QGraphicsView):
             self.ocr_done.discard(page)
             self.ocr_found.discard(page)
             self.imgs.pop(page, None)
+            self.gfx.pop(page, None)
             self.notes.pop(page, None)
             self.dicts.pop(page, None)
             if page < len(self.rects):
@@ -750,7 +755,7 @@ class Viewer(QGraphicsView):
             p.setPen(QPen(QColor("#1a73e8"), 2 * px))
             p.setBrush(QColor(26, 115, 232, 30))
             p.drawRect(sr)
-            if self.tool == "select" and not self.rot[si][0]:
+            if self.tool == "select" and not self.rot[si][0] and not sinfo.get("graphic"):
                 h = 4.5 * px
                 r = pymupdf.Rect(sinfo["bbox"])
                 p.setPen(QPen(QColor("#1a73e8"), 1.2 * px))
@@ -954,9 +959,27 @@ class Viewer(QGraphicsView):
             self.imgs[i] = tools.page_images(self.model.doc[i])
         return self.imgs[i]
 
+    def _graphics(self, i: int) -> list:
+        if i not in self.gfx:
+            self.gfx[i] = tools.page_graphics(self.model.doc[i], self._words(i))
+        return self.gfx[i]
+
+    def _image_or_graphic_at(self, i: int, pt) -> dict | None:
+        """Hình ảnh tại điểm pt; không có thì hình vẽ bằng nét (mã vạch, mã QR…) tại đó."""
+        hit = tools.image_at(self._images(i), pt)
+        if hit is None and self._can_auto_ocr(i):
+            self.auto_ocr(i)                     # trang chữ dạng nét: đọc chữ trước để không nhầm dòng chữ là hình vẽ
+        return hit or tools.image_at(self._graphics(i), pt)
+
     def _select_image(self, i: int, info: dict):
         self.sel_rects, self.sel_text = [], ""
         self.sel_image = (i, info)
+        if info.get("graphic"):
+            self.message.emit("Đã chọn hình vẽ (mã vạch, mã QR, logo…). Ctrl+C để sao chép thành ảnh; chuột phải để lưu "
+                              "thành file.")
+            self.viewport().update()
+            self.selectionChanged.emit()
+            return
         size = f"{info['width']} × {info['height']} px" if info.get("width") else ""
         self.message.emit(f"Đã chọn hình ảnh {size}. Kéo để dời, kéo góc để đổi cỡ (Shift: tự do), kéo nút tròn phía trên "
                           "để xoay (Shift: từng nấc 15°), phím mũi tên để nhích; chuột phải để xoay 90°, lưu, xoá.")
@@ -994,7 +1017,7 @@ class Viewer(QGraphicsView):
         return True
 
     def delete_image(self) -> bool:
-        if not self.sel_image:
+        if not self.sel_image or self.sel_image[1].get("graphic"):
             return False
         i, info = self.sel_image
         self.sel_image = None
@@ -1011,7 +1034,7 @@ class Viewer(QGraphicsView):
 
     def _img_hit(self, sp: QPointF):
         """Chỗ bấm so với ảnh đang chọn: 'rotate' | ('scale', số góc) | 'move' | None."""
-        if not self.sel_image:
+        if not self.sel_image or self.sel_image[1].get("graphic"):     # hình vẽ bằng nét: chỉ sao chép / lưu
             return None
         i, info = self.sel_image
         if i >= len(self.rects):
@@ -1114,6 +1137,8 @@ class Viewer(QGraphicsView):
         if not self.sel_image:
             return
         i, info = self.sel_image
+        if info.get("graphic"):
+            return
         if info.get("annot"):
             self.message.emit("Ảnh chèn dạng con dấu / chữ ký chỉ dời và đổi cỡ được, chưa xoay được.")
             return
@@ -1125,13 +1150,14 @@ class Viewer(QGraphicsView):
         self.viewport().update()
 
     def nudge_image(self, dx: float, dy: float) -> None:
-        if self.sel_image:
+        if self.sel_image and not self.sel_image[1].get("graphic"):
             i, info = self.sel_image
             self._commit_image(i, info, pymupdf.Matrix(1, 0, 0, 1, dx, dy))
             self.viewport().update()
 
     def clear_selection(self):
         self.sel_image = None
+        self.sel_anchor = None
         self.sel_rects, self.sel_text, self.sel_page = [], "", None
         self.viewport().update()
         self.selectionChanged.emit()
@@ -1333,7 +1359,8 @@ class Viewer(QGraphicsView):
             self.pan = (e.position(), self.horizontalScrollBar().value(), self.verticalScrollBar().value(), i, sp)
             self.viewport().setCursor(Qt.ClosedHandCursor)
             return
-        if self.tool == "select" and self.sel_image and not self.rot[self.sel_image[0]][0]:
+        if self.tool == "select" and self.sel_image and not self.rot[self.sel_image[0]][0] \
+                and not self.sel_image[1].get("graphic"):
             hit = self._img_hit(sp)
             if hit:                      # nắm vào ảnh đang chọn: dời / co giãn (góc) / xoay (nút tròn phía trên)
                 self._img_drag_start(self.sel_image[0], sp, hit)
@@ -1357,6 +1384,14 @@ class Viewer(QGraphicsView):
                     box |= r["bbox"]
                 self.drag_run["bbox"] = box
         elif self.tool == "select" or self.tool in MARK_TOOLS:
+            if self.tool == "select" and e.modifiers() & Qt.ShiftModifier and self.sel_text and self.sel_anchor \
+                    and self.sel_anchor[0] == i:
+                # Shift+bấm (như Word, trình duyệt): giữ chỗ bắt đầu của lần chọn trước, chọn tới chỗ vừa bấm
+                self.press = self._spt(i, self.sel_anchor[1])
+                self._update_selection()
+                self.viewport().update()
+                return
+            self.sel_anchor = (i, self.to_page(i, sp))
             self.sel_rects, self.sel_text = [], ""
             self.sel_image = None
             if not self._words(i) and not self._can_auto_ocr(i) and not (self.tool == "select" and self._images(i)):
@@ -1495,9 +1530,9 @@ class Viewer(QGraphicsView):
         tool = self.tool
         col = qcolor_to_rgb(self.colors["draw"])
         if tool == "select":
-            if small:  # bấm một lần (không kéo): chọn hình ảnh tại đó nếu có
+            if small:  # bấm một lần (không kéo): chọn hình ảnh (hoặc hình vẽ bằng nét: mã vạch, mã QR…) tại đó nếu có
                 self.sel_rects, self.sel_text = [], ""
-                hit = tools.image_at(self._images(i), a)
+                hit = self._image_or_graphic_at(i, a)
                 if hit:
                     self._select_image(i, hit)
                     return
@@ -1704,13 +1739,17 @@ class Viewer(QGraphicsView):
             m.addSeparator()
         if i is not None:
             pt0 = self.to_page(i, sp)
-            img = tools.image_at(self._images(i), pt0)
-            if img and not self.sel_text and not self._annot_at(i, pt0):
+            img = self._image_or_graphic_at(i, pt0) if not self.sel_text else None
+            if img and not self._annot_at(i, pt0):
                 self._select_image(i, img)
                 m.addAction(icon_for("Sao chép hình ảnh"), "Sao chép hình ảnh", lambda: self._safe(self.copy_image))
                 m.addAction(icon_for("Lưu hình ảnh thành file…"), "Lưu hình ảnh thành file…", lambda: self._safe(self.save_image))
-                m.addAction(icon_for("Xoá hình ảnh khỏi trang"), "Xoá hình ảnh khỏi trang", lambda: self._safe(self.delete_image))
-                if not self.sel_image[1].get("annot"):
+                if img.get("graphic"):
+                    m.addSeparator()
+                else:
+                    m.addAction(icon_for("Xoá hình ảnh khỏi trang"), "Xoá hình ảnh khỏi trang",
+                                lambda: self._safe(self.delete_image))
+                if not img.get("annot") and not img.get("graphic"):
                     m.addSeparator()
                     m.addAction(icon("rotr"), "Xoay phải 90°", lambda: self._safe(self.rotate_image, 90))
                     m.addAction(icon("rotl"), "Xoay trái 90°", lambda: self._safe(self.rotate_image, -90))
@@ -1746,13 +1785,14 @@ class Viewer(QGraphicsView):
                 self.set_tool("hand")
             return
         if self.sel_image and not self.annot and k in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) \
-                and self.tool == "select":           # phím mũi tên: nhích ảnh đang chọn 1 điểm (Shift: 10 điểm)
+                and self.tool == "select" and not self.sel_image[1].get("graphic"):           # phím mũi tên: nhích ảnh đang chọn 1 điểm (Shift: 10 điểm)
             st = 10.0 if e.modifiers() & Qt.ShiftModifier else 1.0
             dx = {Qt.Key_Left: -st, Qt.Key_Right: st}.get(k, 0.0)
             dy = {Qt.Key_Up: -st, Qt.Key_Down: st}.get(k, 0.0)
             self._safe(self.nudge_image, dx, dy)
             return
-        if k in (Qt.Key_Delete, Qt.Key_Backspace) and self.sel_image and not self.annot:
+        if k in (Qt.Key_Delete, Qt.Key_Backspace) and self.sel_image and not self.annot \
+                and not self.sel_image[1].get("graphic"):
             self._safe(self.delete_image)
             return
         if k in (Qt.Key_Delete, Qt.Key_Backspace) and self.annot:
