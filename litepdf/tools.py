@@ -2295,6 +2295,25 @@ def page_images(page) -> list[dict]:
     return out
 
 
+def page_graphics(page, words: list) -> list[dict]:
+    """Hình vẽ bằng nét (mã vạch, mã QR, logo, biểu đồ…) để chọn như một hình ảnh rồi sao chép / lưu thành file.
+    Bỏ qua cụm nét có chữ bên trong (khung bảng, chữ bị đổi thành nét), đường kẻ mảnh và khung phủ gần hết trang."""
+    out = []
+    try:
+        clusters = page.cluster_drawings()
+    except Exception:
+        return out
+    centers = [((w[0] + w[2]) / 2, (w[1] + w[3]) / 2) for w in words if w[3] - w[1] >= 4]
+    for r in clusters:
+        r = pymupdf.Rect(r)
+        if r.width < 12 or r.height < 12 or abs(r) > 0.5 * abs(page.rect):
+            continue
+        if any(r.x0 <= x <= r.x1 and r.y0 <= y <= r.y1 for x, y in centers):
+            continue
+        out.append({"bbox": r, "xref": 0, "width": 0, "height": 0, "graphic": True})
+    return out
+
+
 def image_at(images: list[dict], pt) -> dict | None:
     """Ảnh tại điểm pt; nếu chồng nhau thì lấy ảnh nhỏ nhất (thường là ảnh nằm trên)."""
     pt = pymupdf.Point(pt)
@@ -2476,10 +2495,27 @@ def looks_like_text_image(page) -> bool:
 
 def ocr_page_words(page, lang: str, dpi: int = 300) -> list:
     """Nhận dạng chữ của trang bằng Tesseract (không sửa trang). Trả về danh sách từ giống page.get_text("words"),
-    toạ độ theo trang gốc."""
+    toạ độ theo trang gốc.
+    Tesseract đôi khi gộp hai dòng sát nhau làm một rồi bỏ mất dòng sau (tuỳ độ phân giải: cùng một trang, 300 dpi mất
+    dòng mà 200 dpi đọc được và ngược lại). Nên đọc ở hai độ phân giải, lấy lần đọc được nhiều chữ hơn làm gốc rồi bù
+    các từ mà lần kia thấy còn lần này bỏ sót."""
     td = find_tessdata()
     if not td:
         return []
+    runs = [_ocr_words(page, lang, td, d) for d in (dpi, 200 if dpi != 200 else 300)]
+    base, extra = sorted(runs, key=len, reverse=True)
+    out = list(base)
+    boxes = [pymupdf.Rect(w[:4]) for w in base]
+    nb = 1 + max((w[5] for w in base), default=0)     # số khối của từ bù thêm không trùng khối của lần đọc gốc
+    for w in extra:
+        r = pymupdf.Rect(w[:4])
+        if any((r & b).get_area() > 0.3 * min(r.get_area(), b.get_area()) for b in boxes):
+            continue
+        out.append(tuple(w[:5]) + (w[5] + nb,) + tuple(w[6:]))
+    return out
+
+
+def _ocr_words(page, lang: str, td: str, dpi: int) -> list:
     pix = page.get_pixmap(dpi=dpi, alpha=False)
     one = pymupdf.open("pdf", pix.pdfocr_tobytes(language=lang, tessdata=td))
     try:

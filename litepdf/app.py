@@ -1371,7 +1371,7 @@ class MainWindow(QMainWindow):
         has_query = bool(self.search_box.text().strip())
         self._set("Sao chép chữ / hình ảnh đang chọn", v.sel_text or v.sel_image)
         self._set("Lưu hình ảnh đang chọn thành file…", v.sel_image)
-        self._set("Xoá hình ảnh đang chọn khỏi trang", v.sel_image)
+        self._set("Xoá hình ảnh đang chọn khỏi trang", v.sel_image and not v.sel_image[1].get("graphic"))
         self._set("Xoá ghi chú/ảnh đang chọn", v.annot)
         self._set("Tìm tiếp", has_query)
         self._set("Tìm ngược lại", has_query)
