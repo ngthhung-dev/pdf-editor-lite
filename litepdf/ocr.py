@@ -180,6 +180,20 @@ def tess_lines(pix, lang: str) -> list:
         one.close()
 
 
+def ocr_page_in_place(page, lang: str, dpi: int = 300) -> int:
+    """Nhận dạng chữ một trang ngay trong tài liệu đang mở (Tesseract): đặt lớp chữ ẩn lên trang gốc, trang giữ nguyên
+    hình thức. Dùng khi bấm Sửa chữ gốc trên trang chưa có chữ. Trả về số dòng chữ đã đặt.
+    Tesseract đôi khi gộp hai dòng sát nhau rồi bỏ mất dòng sau (tuỳ độ phân giải): đọc thêm ở 200 dpi để bù dòng bị sót."""
+    found: list = []
+    for d in (dpi, 200 if dpi != 200 else 300):
+        k = 72.0 / d
+        for (x0, y0, x1, y1), text in tess_lines(_render(page, d), lang):
+            r = pymupdf.Rect(x0 * k, y0 * k, x1 * k, y1 * k)
+            if not any((r & q).get_area() > 0.3 * min(r.get_area(), q.get_area()) for q, _t in found):
+                found.append((r, text))
+    return add_text_layer(page, [((r.x0, r.y0, r.x1, r.y1), t) for r, t in found], 1.0)
+
+
 def make_reader(kind: str, opts: dict, offload=None, note=None, min_score: float = 0.0):
     """Hàm read(pix) -> [(khung điểm ảnh, chữ)]. Phần dùng PyMuPDF chạy ở luồng gọi; phần nặng/chờ mạng đi qua offload."""
     run_it = offload or (lambda fn: fn())
