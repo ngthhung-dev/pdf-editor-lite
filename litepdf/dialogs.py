@@ -322,12 +322,19 @@ class RichTextDialog(QDialog):
     Mỗi dòng trong hộp ứng với một dòng chữ trên trang. Dữ liệu vào/ra: mỗi dòng là [(chữ, đậm, nghiêng, (r, g, b)), ...]."""
 
     def __init__(self, parent, title: str, lines: list[list[tuple]], size: float, single_line: bool = False,
-                 note: str | None = None):
+                 note: str | None = None, width: dict | None = None):
+        """width (tuỳ chọn) để chỉnh bề rộng dòng thay vì để chữ dài tự xuống dòng:
+          - sửa một dòng: {"value": bề rộng mặc định, "max": bề rộng lớn nhất, "lines": hàm(mẩu, cỡ, bề rộng) -> số dòng,
+            "need": hàm(mẩu, cỡ) -> bề rộng để vừa một dòng};
+          - sửa cả vùng: {"no_wrap": True} để hiện ô "Không tự xuống dòng"."""
         super().__init__(parent)
         from PySide6.QtGui import QFont, QTextCharFormat, QTextCursor
         from PySide6.QtWidgets import QTextEdit, QToolButton
         self.setWindowTitle(title)
         self.single = single_line
+        self._width = width or {}
+        self.width_box = None
+        self.no_wrap = None
         self._size0 = round(size, 2)
         first = next((seg for ln in lines for seg in ln), ("", False, False, (0, 0, 0)))
         self.base_color = tuple(first[3])
@@ -382,6 +389,35 @@ class RichTextDialog(QDialog):
         if single_line:
             self.edit.setMaximumHeight(96)
         lay.addWidget(self.edit, 1)
+        if "value" in self._width:               # bề rộng dòng: kéo dài dòng để chữ dài không phải xuống dòng
+            mm = 25.4 / 72
+            row = QHBoxLayout()
+            row.addWidget(QLabel("Bề rộng dòng:"))
+            self.width_box = QDoubleSpinBox()
+            self.width_box.setDecimals(0)
+            self.width_box.setSuffix(" mm")
+            hi = max(self._width["max"], self._width["value"])
+            self.width_box.setRange(max(5.0, round(min(self._width["value"], 20 / mm) * mm)), round(hi * mm))
+            self.width_box.setValue(round(self._width["value"] * mm))
+            self._width0 = self.width_box.value()
+            self.width_box.setToolTip("Chữ dài hơn bề rộng này thì tự xuống dòng. Tăng lên để kéo dài dòng sang phải "
+                                      f"(tối đa tới sát lề phải trang: {round(hi * mm)} mm).")
+            row.addWidget(self.width_box)
+            fit = QPushButton("Vừa một dòng")
+            fit.setToolTip("Kéo dài dòng vừa đủ để chữ mới nằm trên một dòng (không vượt quá lề phải trang)")
+            fit.clicked.connect(self._fit_one_line)
+            row.addWidget(fit)
+            self.width_info = QLabel()
+            self.width_info.setWordWrap(True)
+            self.width_info.setStyleSheet("color:#5f6368")
+            row.addWidget(self.width_info, 1)
+            lay.addLayout(row)
+            self.width_box.valueChanged.connect(self._update_width_info)
+            self.size_box.valueChanged.connect(self._update_width_info)
+            self.edit.textChanged.connect(self._update_width_info)
+        elif self._width.get("no_wrap"):
+            self.no_wrap = QCheckBox("Không tự xuống dòng: dòng dài hơn bề rộng gốc thì kéo dài sang phải (tới sát lề phải trang)")
+            lay.addWidget(self.no_wrap)
         if note:
             lb = QLabel(note)
             lb.setWordWrap(True)
@@ -398,6 +434,35 @@ class RichTextDialog(QDialog):
         cur.movePosition(QTextCursor.End)
         self.edit.setTextCursor(cur)
         self._sync(self.edit.currentCharFormat())
+        if self.width_box is not None:
+            self._update_width_info()
+
+    # -- bề rộng dòng
+    def _cur_size(self) -> float:
+        return self.size_box.value()
+
+    def _fit_one_line(self):
+        need = self._width["need"](self.lines()[0], self._cur_size())
+        mm = 25.4 / 72
+        self.width_box.setValue(min(self.width_box.maximum(), max(self.width_box.minimum(), -(-need * mm // 1) + 1)))
+
+    def _update_width_info(self, *_):
+        try:
+            n = self._width["lines"](self.lines()[0], self._cur_size(), self.width_box.value() * 72 / 25.4)
+        except Exception:
+            return
+        self.width_info.setText("Chữ mới nằm trên 1 dòng." if n <= 1 else
+                                f"Chữ mới sẽ xuống thành {n} dòng.")
+
+    def line_width(self) -> float | None:
+        """Bề rộng dòng (điểm) người dùng chọn, None nếu để mặc định (tự xuống dòng theo bề rộng gốc).
+        Sửa cả vùng: float('inf') khi tích "Không tự xuống dòng"."""
+        if self.width_box is not None:
+            v = self.width_box.value()
+            return None if abs(v - self._width0) < 0.5 else v * 72 / 25.4
+        if self.no_wrap is not None and self.no_wrap.isChecked():
+            return float("inf")
+        return None
 
     # -- định dạng
     def _target(self):

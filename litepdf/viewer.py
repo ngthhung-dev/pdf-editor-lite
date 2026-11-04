@@ -1665,9 +1665,10 @@ class Viewer(QGraphicsView):
             return
         note = (f"{len(runs)} dòng chữ trong vùng đã quét, xếp từ trên xuống, trái sang phải (mỗi ô của bảng là một dòng). "
                 "Mỗi dòng ở đây thay cho đúng một dòng trên trang; xoá trống một dòng là xoá dòng đó; dòng không sửa thì giữ nguyên. "
-                "Bôi chọn chữ rồi bấm B / I / Màu chữ để định dạng riêng phần đó. Dòng dài quá bề rộng gốc sẽ tự xuống dòng.")
+                "Bôi chọn chữ rồi bấm B / I / Màu chữ để định dạng riêng phần đó. Dòng dài quá bề rộng gốc sẽ tự xuống dòng, "
+                "trừ khi tích “Không tự xuống dòng”.")
         dlg = RichTextDialog(self, "Sửa chữ gốc trong vùng đã quét", [list(r["segs"]) for r in runs],
-                             round(runs[0]["size"], 2), note=note)
+                             round(runs[0]["size"], 2), note=note, width={"no_wrap": True})
         if not dlg.exec():
             return
         lines = dlg.lines()
@@ -1675,7 +1676,7 @@ class Viewer(QGraphicsView):
             lines.pop()
         try:
             with self.model.edit(i):
-                used = tools.replace_text_runs(self.model.doc[i], runs, lines, dlg.size())
+                used = tools.replace_text_runs(self.model.doc[i], runs, lines, dlg.size(), no_wrap=dlg.line_width() is not None)
                 self.model.fonts_added = True
         except tools.NoRoom as e:
             QMessageBox.information(self, "Sửa chữ gốc", "Có dòng dài hơn bề rộng gốc nên cần xuống dòng, nhưng:\n\n" + str(e)
@@ -1690,9 +1691,18 @@ class Viewer(QGraphicsView):
         if not run:
             self.message.emit("Không có chữ gốc tại vị trí này (nếu là bản scan thì dùng Xoá vùng + Thêm chữ).")
             return
+        page = self.model.doc[i]
+        dx, dy = run.get("dir", (1, 0))
+        width = None
+        if abs(dy) < 0.01 and dx > 0:            # dòng nằm ngang: cho chỉnh bề rộng dòng (kéo dài thay vì xuống dòng)
+            width = {"value": tools.wrap_width(page, run), "max": tools.max_line_width(page, run),
+                     "lines": lambda segs, size, w: tools.count_lines(run, segs, size, w),
+                     "need": lambda segs, size: tools.text_width(run, segs, size)}
         dlg = RichTextDialog(self, "Sửa chữ gốc", [list(run["segs"])], round(run["size"], 2), single_line=True,
                              note=f"Phông gốc: {run['font'].split('+')[-1]}. Bôi chọn chữ rồi bấm B / I / Màu chữ để định dạng "
-                                  "riêng phần đó. Chữ dài hơn bề rộng của dòng sẽ tự xuống dòng. Xoá hết chữ rồi OK để xoá dòng này.")
+                                  "riêng phần đó. Chữ dài hơn bề rộng dòng sẽ tự xuống dòng: tăng Bề rộng dòng (hoặc bấm "
+                                  "“Vừa một dòng”) để kéo dài dòng sang phải. Xoá hết chữ rồi OK để xoá dòng này.",
+                             width=width)
         if not dlg.exec():
             return
         segs = dlg.lines()[0]
@@ -1703,7 +1713,7 @@ class Viewer(QGraphicsView):
         try:
             with self.model.edit(i):
                 page = self.model.doc[i]
-                used, n = tools.replace_text_run_wrapped(page, run, segs, dlg.size())
+                used, n = tools.replace_text_run_wrapped(page, run, segs, dlg.size(), width=dlg.line_width())
                 self.model.fonts_added = True
         except tools.NoRoom as e:                # không xuống dòng được: trang đã được trả về như cũ
             QMessageBox.information(self, "Sửa chữ gốc", "Chữ mới dài hơn bề rộng của dòng nên cần xuống dòng, nhưng:\n\n" + str(e)
