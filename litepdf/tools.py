@@ -2577,7 +2577,8 @@ def looks_like_text_image(page) -> bool:
         data = page.read_contents()
         if len(data) < 2000:
             return False
-        fills = data.count(b"\nf\n") + data.count(b"\nf*\n") + data.count(b" f\n") + data.count(b" f*\n")
+        # lệnh tô "f" / "f*" đứng riêng (có file ghi mỗi lệnh một dòng, có file ghi liền trên một dòng dài)
+        fills = len(re.findall(rb"(?<=\s)f\*?(?=\s|$)", data))
         return fills >= 80
     except Exception:
         return False

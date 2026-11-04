@@ -1665,9 +1665,40 @@ class Viewer(QGraphicsView):
                 self._edit_text_at(i, a)
             self.drag_run = None
 
+    def _ensure_text_layer(self, i: int) -> None:
+        """Trang chưa có chữ thật (bản scan, file in ra PDF thành nét vẽ): tự nhận dạng chữ (OCR) trang này ngay trong tài
+        liệu trước khi sửa chữ gốc, để không phải chạy Chuyển đổi → Nhận dạng chữ rồi mới sửa được. Ctrl+Z để bỏ."""
+        page = self.model.doc[i]
+        if tools.text_runs(tools.text_dict(page)) or not tools.looks_like_text_image(page):
+            return
+        if page.rotation:
+            self.message.emit("Trang đang bị xoay nên chưa tự nhận dạng chữ được: dùng Chuyển đổi → Nhận dạng chữ (OCR).")
+            return
+        lang = _auto_ocr_lang()
+        if not lang:
+            self.message.emit("Trang này chưa có chữ và máy chưa có Tesseract để tự nhận dạng: dùng Chuyển đổi → Nhận dạng "
+                              "chữ (OCR).")
+            return
+        from . import ocr
+        self.message.emit(f"Trang {i + 1} chưa có chữ: đang tự nhận dạng chữ (OCR) để sửa…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        n = 0
+        try:
+            with self.model.edit(i):
+                n = ocr.ocr_page_in_place(self.model.doc[i], lang)
+                self.model.fonts_added = True
+        except Exception as ex:
+            self.message.emit(f"Không tự nhận dạng được chữ trang {i + 1}: {ex}")
+        finally:
+            QApplication.restoreOverrideCursor()
+        if n:
+            self.message.emit(f"Đã tự nhận dạng {n} dòng chữ ở trang {i + 1} (Ctrl+Z để bỏ).")
+
     def _edit_text_region(self, i: int, rect):
         """Quét một khung: sửa mọi dòng chữ gốc trong khung cùng lúc (mỗi dòng trong hộp ứng với một dòng chữ)."""
         from .dialogs import RichTextDialog
+        self._ensure_text_layer(i)
         runs = tools.text_runs_in(self.model.doc[i], rect)
         if not runs:
             self.message.emit("Không có chữ gốc trong khung vừa quét (nếu là bản scan thì dùng Xoá vùng + Thêm chữ).")
@@ -1701,6 +1732,7 @@ class Viewer(QGraphicsView):
 
     def _edit_text_at(self, i: int, pt):
         from .dialogs import RichTextDialog
+        self._ensure_text_layer(i)
         run = tools.text_run_at(self.model.doc[i], pt)
         if not run:
             self.message.emit("Không có chữ gốc tại vị trí này (nếu là bản scan thì dùng Xoá vùng + Thêm chữ).")
