@@ -1174,10 +1174,11 @@ def text_runs_in(page, rect, d: dict | None = None) -> list[dict]:
     return out
 
 
-def replace_text_runs(page, runs: list[dict], lines: list, size: float | None = None) -> str:
+def replace_text_runs(page, runs: list[dict], lines: list, size: float | None = None, no_wrap: bool = False) -> str:
     """Sửa cả vùng: dòng thứ k trong `lines` thay cho dòng chữ thứ k trong `runs` (giữ đúng vị trí, cỡ của dòng đó).
     Mỗi dòng là chuỗi thường hoặc danh sách mẩu nhiều kiểu. Ít dòng hơn thì các dòng thừa bị xoá; nhiều dòng hơn thì viết
-    tiếp xuống dưới dòng cuối. Dòng không đổi gì thì để nguyên chữ gốc. Dòng dài quá thì tự xuống dòng."""
+    tiếp xuống dưới dòng cuối. Dòng không đổi gì thì để nguyên chữ gốc. Dòng dài quá thì tự xuống dòng; no_wrap: kéo dài
+    dòng sang phải tới sát lề phải trang (chỉ xuống dòng khi vượt cả lề trang)."""
     used = ""
     as_segs = lambda run, x: plain_segs(run, x) if isinstance(x, str) else [tuple(v) for v in x]
     if runs and len(lines) > len(runs):
@@ -1197,7 +1198,8 @@ def replace_text_runs(page, runs: list[dict], lines: list, size: float | None = 
         segs = as_segs(run, lines[k]) if k < len(lines) else []
         if size is None and _norm_segs(run.get("segs", [])) == _norm_segs(segs):
             continue                             # dòng không đổi gì: để nguyên chữ gốc
-        name, _n = replace_text_run_wrapped(page, run, segs, size)
+        name, _n = replace_text_run_wrapped(page, run, segs, size,
+                                            width=max(max_line_width(page, run), wrap_width(page, run)) if no_wrap else None)
         used = used or name
     return used
 
@@ -1700,8 +1702,45 @@ def shift_in_box(page, x0: float, x1: float, cut: float, floor: float, delta: fl
         raise NoRoom("Không đẩy riêng được các dòng trong ô này (bố cục quá phức tạp).")
 
 
+def _wrap_frame(page, run: dict, d: dict | None = None) -> tuple[float, float, dict | None]:
+    """(bề rộng được viết từ đầu dòng trước khi phải xuống dòng, khoảng cách dòng, ô bảng chứa dòng hoặc None)."""
+    if d is None:
+        d = text_dict(page)
+    me = next((r for r in text_runs(d) if r["bbox"] == run["bbox"]), run)
+    limit, pitch = line_frame(page, me, d)
+    cell = cell_of(page, run["bbox"])
+    if cell:                                     # trong ô bảng: được dài tới sát viền phải của ô (trừ lề trong của ô)
+        pad = min(12.0, max(2.0, run["bbox"].x0 - cell["x0"]))
+        limit = max(limit if limit <= cell["x1"] - 1 else 0, cell["x1"] - pad)
+    return limit - run["origin"].x, pitch, cell
+
+
+def wrap_width(page, run: dict) -> float:
+    """Bề rộng dòng mặc định khi sửa chữ (chữ dài hơn thì tự xuống dòng)."""
+    return _wrap_frame(page, run)[0]
+
+
+def max_line_width(page, run: dict) -> float:
+    """Bề rộng lớn nhất được kéo dài dòng: từ đầu dòng tới sát mép phải trang (chừa lề bằng lề trái của dòng, tối đa 36pt)."""
+    margin = min(36.0, max(6.0, run["bbox"].x0))
+    return max(run["bbox"].width, page.rect.width - margin - run["origin"].x)
+
+
+def count_lines(run: dict, segs, size: float | None, width: float | None) -> int:
+    """Số dòng chữ mới sẽ chiếm khi viết trong bề rộng `width`."""
+    fsize = size or run["size"]
+    return len(rich_lines(run, [tuple(x) for x in segs], fsize, width if width and width >= 4 * fsize else None))
+
+
+def text_width(run: dict, segs, size: float | None) -> float:
+    """Bề rộng của chữ mới khi viết trên một dòng."""
+    fsize = size or run["size"]
+    ln = rich_lines(run, [tuple(x) for x in segs], fsize, None)[0]
+    return sum(f.text_length(t, fontsize=fsize) for t, f, *_ in ln) if ln else 0.0
+
+
 def replace_text_run_wrapped(page, run: dict, new, size: float | None = None, color=None,
-                             bold=None, italic=None) -> tuple[str, int]:
+                             bold=None, italic=None, width: float | None = None) -> tuple[str, int]:
     """Thay một dòng chữ gốc bằng chữ mới. `new` là chuỗi thường, hoặc danh sách mẩu nhiều kiểu [(chữ, đậm, nghiêng, màu)].
     Chữ mới dài quá bề rộng của cột / ô thì tự xuống dòng (đúng khoảng cách dòng của đoạn gốc):
       - dòng nằm trong ô bảng: chỉ các dòng còn lại của chính ô đó bị đẩy xuống; ô hết chỗ thì cả hàng của bảng cao thêm
@@ -1716,14 +1755,10 @@ def replace_text_run_wrapped(page, run: dict, new, size: float | None = None, co
         return replace_text_run(page, run, text, size, s0[3], bold=s0[1], italic=s0[2]), 1
     fsize = size or run["size"]
     d = text_dict(page)
-    me = next((r for r in text_runs(d) if r["bbox"] == run["bbox"]), run)
-    limit, pitch = line_frame(page, me, d)
+    room, pitch, cell = _wrap_frame(page, run, d)
     pitch = max(pitch, 1.05 * fsize) if size else pitch
-    cell = cell_of(page, run["bbox"])
-    if cell:                                     # trong ô bảng: được dài tới sát viền phải của ô (trừ lề trong của ô)
-        pad = min(12.0, max(2.0, run["bbox"].x0 - cell["x0"]))
-        limit = max(limit if limit <= cell["x1"] - 1 else 0, cell["x1"] - pad)
-    room = limit - run["origin"].x
+    if width is not None:                        # người dùng tự chọn bề rộng dòng (kéo dài dòng thay vì xuống dòng)
+        room = width
     lines = rich_lines(run, segs, fsize, room if room >= 4 * fsize else None)
     replace_text_run(page, run, "")              # gỡ dòng chữ cũ
     extra = (len(lines) - 1) * pitch
