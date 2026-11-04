@@ -871,6 +871,27 @@ class Viewer(QGraphicsView):
             run["_frame"] = tools.frame_of(self.model.doc[i], run)
         return run
 
+    def _run_or_frame_at(self, i: int, pt, d: dict | None = None) -> dict | None:
+        """Dòng chữ tại điểm pt; trỏ vào chỗ trống trong khung đã kéo (phần đã kéo rộng / cao ra) thì vẫn là dòng chữ của
+        khung đó, để khung và các ô vuông còn hiện mà kéo nhỏ lại được."""
+        page = self.model.doc[i]
+        run = self._with_frame(i, tools.text_run_at(page, pt, d=d))
+        if run is not None:
+            return run
+        pt = pymupdf.Point(pt)
+        best = None
+        for f in tools.text_frames(page):
+            if pt in f["rect"] + (-1, -1, 1, 1) and (best is None or f["rect"].get_area() < best["rect"].get_area()):
+                best = f
+        if best is None:
+            return None
+        runs = tools.frame_runs(page, best, d)
+        if not runs:
+            return None
+        run = runs[0]
+        run["_frame"] = best
+        return run
+
     def _handle_at(self, pg: int, run: dict, sp: QPointF) -> str | None:
         px = 1 / max(1e-6, self.transform().m11())
         for k, hr in self._frame_handles(pg, self._run_box(run), run).items():
@@ -1466,7 +1487,7 @@ class Viewer(QGraphicsView):
                 self.drag_run = dict(run)
                 self.drag_run.update(_group=group, _side=side, bbox=box)
                 return
-            run = self._with_frame(i, tools.text_run_at(page, self.to_page(i, sp)))
+            run = self._run_or_frame_at(i, self.to_page(i, sp))
             if run is not None:
                 self.drag_run = dict(run)
                 fr = run.get("_frame")
@@ -1475,6 +1496,7 @@ class Viewer(QGraphicsView):
                 box = pymupdf.Rect(run["bbox"])
                 for r in self.drag_run["_group"]:
                     box |= r["bbox"]
+                self.drag_run["_at"] = (run["bbox"].tl + run["bbox"].br) / 2     # bấm vào chỗ trống của khung: sửa dòng đầu khung
                 self.drag_run["bbox"] = box
         elif self.tool == "select" or self.tool in MARK_TOOLS:
             if self.tool == "select" and e.modifiers() & Qt.ShiftModifier and self.sel_text and self.sel_anchor \
@@ -1540,7 +1562,7 @@ class Viewer(QGraphicsView):
             if i is not None:
                 if i not in self.dicts:
                     self.dicts[i] = tools.text_dict(self.model.doc[i])
-                run = self._with_frame(i, tools.text_run_at(self.model.doc[i], self.to_page(i, sp), d=self.dicts[i]))
+                run = self._run_or_frame_at(i, self.to_page(i, sp), d=self.dicts[i])
             new = (i, run) if run else None
             old = self.hover_run
             side = self._handle_at(i, old[1], sp) if old and old[0] == i else None
@@ -1607,10 +1629,14 @@ class Viewer(QGraphicsView):
             start, _h, _v, i, sp0 = self.pan
             self.pan = None
             self.viewport().setCursor(Qt.OpenHandCursor)
-            if (e.position() - start).manhattanLength() < 4 and i is not None:
-                pt = self.to_page(i, sp0)
-                if not self._click_widget(i, pt):
-                    self._click_link(i, pt)
+            if (e.position() - start).manhattanLength() < 4:
+                # công cụ bàn tay: bấm (không kéo) là bỏ chọn hình / chữ đã chọn trước đó (vd. chọn qua menu chuột phải)
+                if self.sel_image or self.sel_rects or self.sel_text:
+                    self.clear_selection()
+                if i is not None:
+                    pt = self.to_page(i, sp0)
+                    if not self._click_widget(i, pt):
+                        self._click_link(i, pt)
             return
         if self.annot_mode and self.annot:
             if getattr(self, "annot_moved", False):
@@ -1763,7 +1789,7 @@ class Viewer(QGraphicsView):
                 self.message.emit(f"Đã dời {what}" + (f" (phông thay thế: {used})." if used else ".")
                                   + " Ctrl+Z để hoàn tác.")
             elif small and self.drag_run is not None:
-                self._edit_text_at(i, a)
+                self._edit_text_at(i, a if tools.text_run_at(self.model.doc[i], a) else self.drag_run.get("_at", a))
             elif not small:
                 self._edit_text_region(i, rect)
             else:
