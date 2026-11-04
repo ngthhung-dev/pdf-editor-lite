@@ -171,7 +171,7 @@ def tess_lines(pix, lang: str) -> list:
         out = []
         for b in pg.get_text("dict").get("blocks", []):
             for ln in b.get("lines", []):
-                text = "".join(sp["text"] for sp in ln["spans"]).strip()
+                text = tools.ocr_line_text(ln["spans"]).strip()      # chèn dấu cách Tesseract bỏ sót giữa hai từ
                 if text:
                     x0, y0, x1, y1 = ln["bbox"]
                     out.append(((x0 * kx, y0 * ky, x1 * kx, y1 * ky), text))
