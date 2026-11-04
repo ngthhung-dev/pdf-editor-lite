@@ -1059,6 +1059,22 @@ def page_text(page, sort: bool = False) -> str:
     return "\n".join(out)
 
 
+def _ocr_run_size(run: dict) -> float:
+    """Cỡ chữ thật của một dòng chữ ẩn OCR. Cỡ ghi trong lớp chữ ẩn lệch nhiều (theo khung dòng của Tesseract, mỗi từ
+    một cỡ), nên đo theo bề rộng: khung chữ ẩn trải đúng bề rộng chữ nhìn thấy, chia cho bề rộng của chính dòng chữ đó
+    ở cỡ 1 (phông Helvetica, cùng số đo với Arial; bỏ dấu tiếng Việt vì dấu không làm chữ rộng ra)."""
+    import unicodedata
+    h = max(3.0, run["bbox"].height)
+    plain = "".join(c for c in unicodedata.normalize("NFD", run["text"].replace("\xa0", " "))
+                    if not unicodedata.combining(c)).replace("đ", "d").replace("Đ", "D")
+    try:
+        unit = pymupdf.get_text_length(plain, "helv", 1)
+    except Exception:
+        unit = 0
+    est = run["bbox"].width / unit if unit > 0 else 0
+    return est if 0.7 * h <= est <= 1.6 * h else h
+
+
 def text_runs(d: dict) -> list[dict]:
     """Các "dòng chữ" sửa được của trang: những mẩu chữ cùng kiểu, cùng hàng, nằm sát nhau được nối thành một dòng.
     (Nhiều file PDF ghi một dòng thành nhiều mẩu rời, có khi từng chữ cái; không nối thì chỉ sửa được từng mẩu.)
@@ -1087,20 +1103,24 @@ def text_runs(d: dict) -> list[dict]:
     def start(s, dr):
         runs.append({"bbox": pymupdf.Rect(s["bbox"]), "text": s["text"], "origin": pymupdf.Point(s["origin"]),
                      "size": s["size"], "color": _rgb(s["color"]), "font": s["font"], "flags": s["flags"], "dir": dr,
-                     "block": s.get("_blk"),
+                     "block": s.get("_blk"), "hidden": s.get("alpha", 255) == 0,     # chữ ẩn của lớp OCR
                      "_parts": {style_of(s): [len(s["text"]), s]},
                      "segs": [[s["text"], bool(s["flags"] & 16), bool(s["flags"] & 2), _rgb(s["color"])]]})
     for s, dr in horiz:
         r = runs[-1] if runs else None
         # Nối theo DÒNG nhìn thấy trên trang: cùng hàng, cỡ chữ gần bằng nhau, đứng sát nhau. Chữ đậm / nghiêng / khác màu
         # nằm giữa dòng vẫn thuộc dòng đó (kiểu chữ của dòng lấy theo phần chiếm nhiều chữ nhất).
+        ratio = s["size"] / max(0.1, r["size"]) if r is not None else 0
+        # lớp chữ ẩn của bản scan (Tesseract) ghi cỡ chữ khác nhau cho từng từ trên cùng một dòng: nới điều kiện cỡ chữ
+        ocr_pair = r is not None and r["hidden"] and s.get("alpha", 255) == 0
         if r is not None and abs(r["origin"].y - s["origin"][1]) < 0.25 * s["size"] \
-                and 0.88 <= s["size"] / max(0.1, r["size"]) <= 1.14:
+                and (0.88 <= ratio <= 1.14 or ocr_pair and 0.6 <= ratio <= 1.6):
             gap = s["bbox"][0] - r["bbox"].x1
             if -0.6 * s["size"] <= gap <= 1.2 * s["size"]:
                 glue = "" if r["text"].endswith(" ") or s["text"].startswith(" ") or gap < 0.18 * s["size"] else " "
                 r["text"] += glue + s["text"]
                 r["bbox"] |= pymupdf.Rect(s["bbox"])
+                r["hidden"] = r["hidden"] and s.get("alpha", 255) == 0
                 seg = [glue + s["text"], bool(s["flags"] & 16), bool(s["flags"] & 2), _rgb(s["color"])]
                 if r["segs"][-1][1:] == seg[1:]:
                     r["segs"][-1][0] += seg[0]            # cùng kiểu với mẩu trước: gộp lại
@@ -1121,6 +1141,8 @@ def text_runs(d: dict) -> list[dict]:
         r["text"] = r["text"].rstrip()
         r["segs"][-1][0] = r["segs"][-1][0].rstrip()
         r["segs"] = [tuple(x) for x in r["segs"] if x[0]]
+        if r["hidden"]:      # chữ ẩn OCR: phông/cỡ ghi trong file chỉ là ước lượng; chữ viết lại dùng Arial, cỡ đo lại
+            r["font"], r["size"] = "Arial", _ocr_run_size(r)
     d["_runs"] = runs
     return runs
 
@@ -1202,9 +1224,42 @@ def insert_text_lines(page, disp_pt, text: str, size=12, color=(0, 0, 0), family
     return font.name
 
 
+def _background_color(page, rect) -> tuple[float, float, float]:
+    """Màu nền quanh một vùng (màu xuất hiện nhiều nhất trong vùng và viền xung quanh), mặc định là trắng."""
+    try:
+        from collections import Counter
+        clip = pymupdf.Rect(rect) + (-3, -3, 3, 3)
+        clip = clip * page.rotation_matrix if page.rotation else clip
+        clip.normalize()
+        pix = page.get_pixmap(clip=clip & page.rect, dpi=72, alpha=False, annots=False)
+        n, data = pix.n, pix.samples
+        if n < 3:
+            return (1.0, 1.0, 1.0)
+        cnt = Counter(bytes(data[k:k + 3]) for k in range(0, len(data), n))
+        return tuple(v / 255 for v in cnt.most_common(1)[0][0])
+    except Exception:
+        return (1.0, 1.0, 1.0)
+
+
+def _erase_drawn_text(page, run: dict) -> None:
+    """Dòng chữ thuộc lớp chữ ẩn do OCR tạo: chữ nhìn thấy nằm bên dưới là ảnh (bản scan) hoặc nét vẽ (file in ra PDF).
+    Sửa / dời / xoá dòng đó thì phải xoá cả chữ nhìn thấy, không thì chữ mới đè lên chữ cũ. Chỗ xoá được tô bằng màu nền
+    quanh dòng chữ; chữ ẩn của các dòng bên cạnh giữ nguyên."""
+    s = run["size"]
+    r = pymupdf.Rect(run["bbox"]) + (-0.12 * s, -0.12 * s, 0.12 * s, 0.12 * s)    # khung OCR thường sát mép chữ
+    r &= page.rect
+    if r.is_empty:
+        return
+    page.add_redact_annot(r, fill=_background_color(page, run["bbox"]), cross_out=False)
+    page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_PIXELS, graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED,
+                          text=pymupdf.PDF_REDACT_TEXT_NONE)
+
+
 def replace_text_run(page, run: dict, new_text: str, size: float | None = None, color=None,
                      bold=None, italic=None, origin=None) -> str:
     """Xoá đoạn chữ gốc và viết chữ mới tại đúng vị trí. Trả về tên phông đã dùng."""
+    if run.get("hidden"):
+        _erase_drawn_text(page, run)
     size = size or run["size"]
     color = color if color is not None else run["color"]
     bbox = pymupdf.Rect(run["bbox"])
