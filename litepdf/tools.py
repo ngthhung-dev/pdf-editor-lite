@@ -1317,20 +1317,67 @@ def paragraph_runs(page, run: dict, d: dict | None = None) -> list[dict]:
     return sorted(para, key=lambda r: r["origin"].y)
 
 
-def move_text_runs(page, runs: list[dict], dx: float, dy: float, scale: float = 1.0) -> str:
-    """Dời các dòng chữ gốc đi (dx, dy) điểm: xoá chữ ở chỗ cũ rồi viết lại đúng kiểu chữ (đậm, nghiêng, màu) ở chỗ mới.
-    scale: phóng to / thu nhỏ cỡ chữ của dòng (giữ nguyên đầu dòng và đường chân chữ)."""
+def move_text_runs(page, runs: list[dict], dx: float, dy: float) -> str:
+    """Dời các dòng chữ gốc đi (dx, dy) điểm: xoá chữ ở chỗ cũ rồi viết lại đúng kiểu chữ (đậm, nghiêng, màu) ở chỗ mới."""
     plans = []
     for r in runs:
-        size = max(2.0, r["size"] * scale)
-        pieces = rich_lines(r, list(r["segs"]), size, None)[0]
-        plans.append((r, pieces, size))
-    for r, _p, _s in plans:
+        pieces = rich_lines(r, list(r["segs"]), r["size"], None)[0]
+        plans.append((r, pieces))
+    for r, _ in plans:
         replace_text_run(page, r, "")
     used = ""
-    for r, pieces, size in plans:
-        used = write_pieces(page, r["origin"] + (dx, dy), pieces, size) or used
+    for r, pieces in plans:
+        used = write_pieces(page, r["origin"] + (dx, dy), pieces, r["size"]) or used
     return used
+
+
+def text_frame(runs: list[dict]) -> pymupdf.Rect:
+    """Khung bao các dòng chữ (một dòng, hoặc cả đoạn khi giữ Ctrl)."""
+    box = pymupdf.Rect(runs[0]["bbox"])
+    for r in runs[1:]:
+        box |= r["bbox"]
+    return box
+
+
+def frame_lines(runs: list[dict], width: float) -> int:
+    """Số dòng các dòng chữ sẽ chiếm khi dàn lại trong khung rộng `width` (cỡ chữ giữ nguyên)."""
+    segs = _joined_segs(runs)
+    return len(rich_lines(runs[0], segs, runs[0]["size"], width if width >= 2 * runs[0]["size"] else None))
+
+
+def _joined_segs(runs: list[dict]) -> list[tuple]:
+    segs: list[tuple] = []
+    for r in sorted(runs, key=lambda r: (r["origin"].y, r["bbox"].x0)):
+        if segs:
+            segs.append((" ",) + tuple(segs[-1][1:]))
+        segs += [tuple(s) for s in r["segs"]]
+    return segs
+
+
+def reflow_text_runs(page, runs: list[dict], box) -> tuple[str, int]:
+    """Dàn lại các dòng chữ vào khung mới, CỠ CHỮ GIỮ NGUYÊN (như kéo khung chữ trong Word):
+      - mép trái / phải: chữ bắt đầu ở mép trái mới, tự xuống dòng theo bề rộng mới (rộng ra thì nối lại thành ít dòng hơn);
+      - mép trên: cả khối chữ dời theo mép trên;
+      - mép dưới: khung cao hơn chỗ chữ cần thì giãn đều khoảng cách giữa các dòng (một dòng thì giữ nguyên).
+    Trả về (tên phông, số dòng)."""
+    box = pymupdf.Rect(box)
+    first = min(runs, key=lambda r: (r["origin"].y, r["bbox"].x0))
+    size = first["size"]
+    segs = _joined_segs(runs)
+    ys = sorted({round(r["origin"].y, 1) for r in runs})
+    pitch = (ys[-1] - ys[0]) / (len(ys) - 1) if len(ys) > 1 else 1.2 * size
+    pitch = max(pitch, 1.05 * size)
+    asc = max(0.5 * size, first["origin"].y - first["bbox"].y0)          # đầu khung -> chân chữ của dòng đầu
+    desc = max(0.1 * size, first["bbox"].y1 - first["origin"].y)
+    lines = rich_lines(first, segs, size, box.width if box.width >= 2 * size else None)
+    if len(lines) > 1:
+        pitch = max(pitch, (box.height - asc - desc) / (len(lines) - 1))
+    for r in runs:
+        replace_text_run(page, r, "")
+    name = ""
+    for k, pieces in enumerate(lines):
+        name = write_pieces(page, pymupdf.Point(box.x0, box.y0 + asc + k * pitch), pieces, size) or name
+    return name, len(lines)
 
 
 class NoRoom(Exception):
