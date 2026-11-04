@@ -2586,6 +2586,49 @@ def looks_like_text_image(page) -> bool:
         return False
 
 
+def ocr_line_text(spans: list) -> str:
+    """Chữ của một dòng do Tesseract tạo: mỗi từ là một mẩu riêng nhưng giữa hai từ không phải lúc nào cũng có dấu cách
+    ("ThịMỹThoa"); hai mẩu cách nhau một khoảng thì chèn dấu cách."""
+    out, prev = "", None
+    for s in spans:
+        t = s["text"]
+        if not t:
+            continue
+        if prev is not None and out and not out[-1].isspace() and not t[0].isspace() \
+                and s["bbox"][0] - prev > 0.12 * s["size"]:
+            out += " "
+        out += t
+        prev = s["bbox"][2]
+    return out
+
+
+def ocr_words(page) -> list:
+    """Như page.get_text("words") cho trang do Tesseract tạo, nhưng tách cả những từ dính liền vì thiếu dấu cách
+    (tách ở chỗ hai chữ cái cách nhau một khoảng)."""
+    out = []
+    for bi, b in enumerate(page.get_text("rawdict").get("blocks", [])):
+        for li, ln in enumerate(b.get("lines", [])):
+            cur, box, last, wn = "", None, None, 0
+            for s in ln.get("spans", []):
+                for c in s.get("chars", []):
+                    r = pymupdf.Rect(c["bbox"])
+                    gap = last is not None and r.x0 - last > 0.12 * s["size"]
+                    if c["c"].isspace() or gap:
+                        if cur:
+                            out.append((box.x0, box.y0, box.x1, box.y1, cur, bi, li, wn))
+                            wn += 1
+                        cur, box = "", None
+                        if c["c"].isspace():
+                            last = None
+                            continue
+                    cur += c["c"]
+                    box = r if box is None else box | r
+                    last = r.x1
+            if cur:
+                out.append((box.x0, box.y0, box.x1, box.y1, cur, bi, li, wn))
+    return out
+
+
 def ocr_page_words(page, lang: str, dpi: int = 300) -> list:
     """Nhận dạng chữ của trang bằng Tesseract (không sửa trang). Trả về danh sách từ giống page.get_text("words"),
     toạ độ theo trang gốc.
@@ -2618,7 +2661,7 @@ def _ocr_words(page, lang: str, td: str, dpi: int) -> list:
         ky = page.rect.height / max(1e-6, op.rect.height)
         m = page.derotation_matrix if page.rotation else None
         out = []
-        for w in op.get_text("words"):
+        for w in ocr_words(op):
             r = pymupdf.Rect(w[0] * kx, w[1] * ky, w[2] * kx, w[3] * ky)
             if m is not None:
                 r = (r * m).normalize()
