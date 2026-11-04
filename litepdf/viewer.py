@@ -795,10 +795,10 @@ class Viewer(QGraphicsView):
             pg, run = self.hover_run
             p.setPen(QPen(QColor("#1a73e8"), 1.2 * px, Qt.DashLine))
             p.setBrush(QColor(26, 115, 232, 25))
-            p.drawRect(self.to_scene(pg, run["bbox"]).adjusted(-px, -px, px, px))
+            p.drawRect(self.to_scene(pg, self._run_box(run)).adjusted(-px, -px, px, px))
             p.setPen(QPen(QColor("#1a73e8"), 1.2 * px))      # ô vuông ở 4 cạnh: kéo để đổi khung dòng chữ
             p.setBrush(Qt.white)
-            for hr in self._frame_handles(pg, run["bbox"], run).values():
+            for hr in self._frame_handles(pg, self._run_box(run), run).values():
                 p.drawRect(hr)
         # ghi chú đang chọn
         if self.annot and self.annot_rect is not None and self.annot[0] < len(self.rects):
@@ -861,9 +861,19 @@ class Viewer(QGraphicsView):
                "t": QPointF(box.center().x(), box.top()), "b": QPointF(box.center().x(), box.bottom())}
         return {k: QRectF(q.x() - h, q.y() - h, 2 * h, 2 * h) for k, q in pts.items()}
 
+    @staticmethod
+    def _run_box(run: dict):
+        """Khung hiện quanh dòng chữ: khung người dùng đã kéo (nếu có), không thì đúng chỗ dòng chữ."""
+        return run["_frame"]["rect"] if run.get("_frame") else run["bbox"]
+
+    def _with_frame(self, i: int, run: dict | None) -> dict | None:
+        if run is not None:
+            run["_frame"] = tools.frame_of(self.model.doc[i], run)
+        return run
+
     def _handle_at(self, pg: int, run: dict, sp: QPointF) -> str | None:
         px = 1 / max(1e-6, self.transform().m11())
-        for k, hr in self._frame_handles(pg, run["bbox"], run).items():
+        for k, hr in self._frame_handles(pg, self._run_box(run), run).items():
             if hr.adjusted(-3 * px, -3 * px, 3 * px, 3 * px).contains(sp):
                 return k
         return None
@@ -1445,14 +1455,23 @@ class Viewer(QGraphicsView):
             side = self._handle_at(i, hr[1], sp) if hr and hr[0] == i else None
             if side:                                 # nắm ô vuông ở một cạnh: kéo để đổi khung dòng chữ (cỡ chữ giữ nguyên)
                 run = hr[1]
-                group = tools.paragraph_runs(page, run) if e.modifiers() & Qt.ControlModifier else [run]
+                fr = run.get("_frame")
+                if e.modifiers() & Qt.ControlModifier:
+                    group = tools.paragraph_runs(page, run)
+                else:                                # khung đã kéo trước đó: kéo tiếp từ đúng khung đó, cả các dòng trong khung
+                    group = (tools.frame_runs(page, fr) if fr else []) or [run]
+                box = tools.text_frame(group)
+                if fr and not e.modifiers() & Qt.ControlModifier:
+                    box = pymupdf.Rect(fr["rect"])
                 self.drag_run = dict(run)
-                self.drag_run.update(_group=group, _side=side, bbox=tools.text_frame(group))
+                self.drag_run.update(_group=group, _side=side, bbox=box)
                 return
-            run = tools.text_run_at(page, self.to_page(i, sp))
+            run = self._with_frame(i, tools.text_run_at(page, self.to_page(i, sp)))
             if run is not None:
                 self.drag_run = dict(run)
-                self.drag_run["_group"] = tools.paragraph_runs(page, run) if e.modifiers() & Qt.ControlModifier else [run]
+                fr = run.get("_frame")
+                self.drag_run["_group"] = tools.paragraph_runs(page, run) if e.modifiers() & Qt.ControlModifier else \
+                    (tools.frame_runs(page, fr) if fr else []) or [run]
                 box = pymupdf.Rect(run["bbox"])
                 for r in self.drag_run["_group"]:
                     box |= r["bbox"]
@@ -1521,7 +1540,7 @@ class Viewer(QGraphicsView):
             if i is not None:
                 if i not in self.dicts:
                     self.dicts[i] = tools.text_dict(self.model.doc[i])
-                run = tools.text_run_at(self.model.doc[i], self.to_page(i, sp), d=self.dicts[i])
+                run = self._with_frame(i, tools.text_run_at(self.model.doc[i], self.to_page(i, sp), d=self.dicts[i]))
             new = (i, run) if run else None
             old = self.hover_run
             side = self._handle_at(i, old[1], sp) if old and old[0] == i else None
@@ -1827,7 +1846,9 @@ class Viewer(QGraphicsView):
         dx, dy = run.get("dir", (1, 0))
         width = None
         if abs(dy) < 0.01 and dx > 0:            # dòng nằm ngang: cho chỉnh bề rộng dòng (kéo dài thay vì xuống dòng)
-            width = {"value": tools.wrap_width(page, run), "max": tools.max_line_width(page, run),
+            fr = tools.frame_of(page, run)       # khung đã kéo: bề rộng dòng lấy đúng theo khung đó
+            room = fr["rect"].x1 - run["origin"].x if fr else tools.wrap_width(page, run)
+            width = {"value": room, "max": max(room, tools.max_line_width(page, run)),
                      "lines": lambda segs, size, w: tools.count_lines(run, segs, size, w),
                      "need": lambda segs, size: tools.text_width(run, segs, size)}
         dlg = RichTextDialog(self, "Sửa chữ gốc", [list(run["segs"])], round(run["size"], 2), single_line=True,

@@ -1,6 +1,7 @@
 """Lõi xử lý PDF của PDF Editor Lite (không phụ thuộc giao diện)."""
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -1319,6 +1320,7 @@ def paragraph_runs(page, run: dict, d: dict | None = None) -> list[dict]:
 
 def move_text_runs(page, runs: list[dict], dx: float, dy: float) -> str:
     """Dời các dòng chữ gốc đi (dx, dy) điểm: xoá chữ ở chỗ cũ rồi viết lại đúng kiểu chữ (đậm, nghiêng, màu) ở chỗ mới."""
+    move_text_frames(page, runs, dx, dy)
     plans = []
     for r in runs:
         pieces = rich_lines(r, list(r["segs"]), r["size"], None)[0]
@@ -1337,6 +1339,78 @@ def text_frame(runs: list[dict]) -> pymupdf.Rect:
     for r in runs[1:]:
         box |= r["bbox"]
     return box
+
+
+# Khung dòng chữ người dùng đã kéo (bề rộng, chiều cao) được ghi vào chính trang PDF (khoá riêng của trang, trình đọc PDF
+# khác bỏ qua), để lần sửa chữ sau viết đúng trong khung đó: lưu file, mở lại vẫn còn; Ctrl+Z hoàn tác cùng với chữ.
+_FRAMES_KEY = "LitePDFFrames"
+
+
+def text_frames(page) -> list[dict]:
+    """Các khung dòng chữ đã kéo trên trang: [{'rect': Rect, 'pitch': khoảng cách dòng}]."""
+    try:
+        kind, val = page.parent.xref_get_key(page.xref, _FRAMES_KEY)
+        if kind != "string" or not val:
+            return []
+        out = []
+        for f in json.loads(val):
+            r = pymupdf.Rect(f[:4])
+            if not r.is_empty:
+                out.append({"rect": r, "pitch": float(f[4]) if len(f) > 4 else 0.0})
+        return out
+    except Exception:
+        return []
+
+
+def _save_frames(page, frames: list[dict]) -> None:
+    doc = page.parent
+    if not frames:
+        doc.xref_set_key(page.xref, _FRAMES_KEY, "null")
+        return
+    data = json.dumps([[round(v, 2) for v in f["rect"]] + [round(f.get("pitch") or 0, 2)] for f in frames])
+    doc.xref_set_key(page.xref, _FRAMES_KEY, pymupdf.get_pdf_str(data))
+
+
+def frame_of(page, run: dict, frames: list[dict] | None = None) -> dict | None:
+    """Khung đã kéo chứa dòng chữ `run` (chân chữ đầu dòng nằm trong khung), hoặc None."""
+    o, b = run["origin"], run["bbox"]
+    best = None
+    for f in text_frames(page) if frames is None else frames:
+        r = f["rect"]
+        if r.x0 - 1.5 <= o.x <= r.x1 and r.y0 - 1 <= o.y <= r.y1 + 1.5 and b.x0 < r.x1 and b.y1 > r.y0:
+            if best is None or r.get_area() < best["rect"].get_area():
+                best = f
+    return best
+
+
+def frame_runs(page, frame: dict, d: dict | None = None) -> list[dict]:
+    """Các dòng chữ nằm trong khung đã kéo, xếp trên xuống."""
+    frames = [frame]
+    runs = [r for r in text_runs(d if d is not None else text_dict(page))
+            if r.get("dir", (1, 0)) == (1, 0) or abs(r.get("dir", (1, 0))[1]) < 0.01]
+    return sorted((r for r in runs if frame_of(page, r, frames)), key=lambda r: (r["origin"].y, r["bbox"].x0))
+
+
+def set_text_frame(page, rect, pitch: float, old=None) -> None:
+    """Ghi khung dòng chữ vừa kéo / vừa sửa. Các khung cũ đè lên vùng `old` (khung trước khi kéo) bị thay."""
+    rect = pymupdf.Rect(rect)
+    olds = [pymupdf.Rect(o) for o in (old or [])] + [rect]
+    frames = [f for f in text_frames(page) if not any((f["rect"] & o).get_area() > 0.3 * min(f["rect"].get_area(), o.get_area())
+                                                      for o in olds if not o.is_empty)]
+    frames.append({"rect": rect, "pitch": pitch})
+    _save_frames(page, frames)
+
+
+def move_text_frames(page, runs: list[dict], dx: float, dy: float) -> None:
+    """Dời dòng chữ thì khung đã kéo chứa các dòng đó dời theo."""
+    frames = text_frames(page)
+    hit = False
+    for f in frames:
+        if any(frame_of(page, r, [f]) for r in runs):
+            f["rect"] = f["rect"] + (dx, dy, dx, dy)
+            hit = True
+    if hit:
+        _save_frames(page, frames)
 
 
 def frame_lines(runs: list[dict], width: float) -> int:
@@ -1372,11 +1446,15 @@ def reflow_text_runs(page, runs: list[dict], box) -> tuple[str, int]:
     lines = rich_lines(first, segs, size, box.width if box.width >= 2 * size else None)
     if len(lines) > 1:
         pitch = max(pitch, (box.height - asc - desc) / (len(lines) - 1))
+    old = [text_frame(runs)] + [f["rect"] for f in text_frames(page) if any(frame_of(page, r, [f]) for r in runs)]
     for r in runs:
         replace_text_run(page, r, "")
     name = ""
     for k, pieces in enumerate(lines):
         name = write_pieces(page, pymupdf.Point(box.x0, box.y0 + asc + k * pitch), pieces, size) or name
+    # nhớ khung vừa kéo: lần sửa chữ sau viết trong đúng bề rộng / chiều cao này
+    need = box.y0 + asc + (len(lines) - 1) * pitch + desc
+    set_text_frame(page, pymupdf.Rect(box.x0, box.y0, box.x1, max(box.y1, need)), pitch, old)
     return name, len(lines)
 
 
@@ -1804,15 +1882,32 @@ def replace_text_run_wrapped(page, run: dict, new, size: float | None = None, co
         return replace_text_run(page, run, text, size, s0[3], bold=s0[1], italic=s0[2]), 1
     fsize = size or run["size"]
     d = text_dict(page)
-    room, pitch, cell = _wrap_frame(page, run, d)
+    frame = frame_of(page, run)                  # dòng nằm trong khung người dùng đã kéo: viết theo đúng khung đó
+    if frame:
+        room, pitch, cell = frame["rect"].x1 - run["origin"].x, frame["pitch"] or 1.2 * run["size"], None
+    else:
+        room, pitch, cell = _wrap_frame(page, run, d)
     pitch = max(pitch, 1.05 * fsize) if size else pitch
     if width is not None:                        # người dùng tự chọn bề rộng dòng (kéo dài dòng thay vì xuống dòng)
         room = width
     lines = rich_lines(run, segs, fsize, room if room >= 4 * fsize else None)
     replace_text_run(page, run, "")              # gỡ dòng chữ cũ
     extra = (len(lines) - 1) * pitch
+    bottom = pymupdf.Rect(run["bbox"]).y1
+    if frame:
+        fr = pymupdf.Rect(frame["rect"])
+        if math.isfinite(room) and room > 2 * fsize:
+            fr.x1 = run["origin"].x + room       # bề rộng chỉnh trong hộp sửa chữ: khung theo bề rộng đó
+        under = [r for r in frame_runs(page, frame, d) if r["origin"].y > run["origin"].y + 0.5 * run["size"]]
+        if extra > 0 and not under:
+            # chỉ có dòng này trong khung: khung còn chỗ (đã kéo cao) thì viết luôn trong khung, không đẩy gì xuống
+            need = bottom + extra - fr.y1
+            if need > 0.5:
+                shift_below(page, bottom, need)
+            extra = 0
+        fr.y1 = max(fr.y1 + extra, bottom + (len(lines) - 1) * pitch)
+        set_text_frame(page, fr, pitch, [frame["rect"]])
     if extra > 0:
-        bottom = pymupdf.Rect(run["bbox"]).y1
         if cell:
             runs = text_runs(text_dict(page))
             mine = [r for r in runs if r["bbox"].x0 >= cell["x0"] - 0.5 and r["bbox"].x1 <= cell["x1"] + 0.5
