@@ -791,11 +791,15 @@ class Viewer(QGraphicsView):
             p.setBrush(Qt.NoBrush)
             p.drawPolygon(poly)
         # chữ gốc dưới con trỏ (công cụ sửa chữ)
-        if self.tool == "edittext" and self.hover_run:
+        if self.tool == "edittext" and self.hover_run and not (self.drag_run and self.press is not None):
             pg, run = self.hover_run
             p.setPen(QPen(QColor("#1a73e8"), 1.2 * px, Qt.DashLine))
             p.setBrush(QColor(26, 115, 232, 25))
             p.drawRect(self.to_scene(pg, run["bbox"]).adjusted(-px, -px, px, px))
+            if self._run_handle(pg, run) is not None:          # ô vuông kéo giãn: phóng to / thu nhỏ dòng chữ
+                p.setPen(QPen(QColor("#1a73e8"), 1.2 * px))
+                p.setBrush(Qt.white)
+                p.drawRect(self._run_handle(pg, run))
         # ghi chú đang chọn
         if self.annot and self.annot_rect is not None and self.annot[0] < len(self.rects):
             sr = self.to_scene(self.annot[0], self.annot_rect)
@@ -829,11 +833,45 @@ class Viewer(QGraphicsView):
             if abs(d.x()) + abs(d.y()) > 3 * px:
                 p.setPen(QPen(QColor("#1a73e8"), 1.2 * px, Qt.DashLine))
                 p.setBrush(QColor(26, 115, 232, 40))
-                p.drawRect(self.to_scene(self.press_page, self.drag_run["bbox"]).translated(d))
+                if self.drag_run.get("_scale"):
+                    s = self._run_scale(self.press_page, self.cur)
+                    p.drawRect(self.to_scene(self.press_page, self._scaled_box(self.drag_run, s)))
+                    p.setPen(QColor("#1a73e8"))
+                    p.drawText(self.to_scene(self.press_page, self._scaled_box(self.drag_run, s)).bottomRight()
+                               + QPointF(4 * px, 0), f"{self.drag_run['size'] * s:.1f} pt")
+                else:
+                    p.drawRect(self.to_scene(self.press_page, self.drag_run["bbox"]).translated(self._move_delta(d)))
         if self.ink:
             p.setPen(QPen(self.colors["draw"], self.line_width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
             p.setBrush(Qt.NoBrush)
             p.drawPolyline(QPolygonF(self.ink))
+
+    # ------------------------------------------------------------ dời / phóng to dòng chữ (công cụ sửa chữ gốc)
+    def _run_handle(self, pg: int, run: dict) -> QRectF | None:
+        """Ô vuông kéo giãn ở giữa mép phải dòng chữ (toạ độ cảnh); None với chữ xoay / chữ dọc."""
+        dx, dy = run.get("dir", (1, 0))
+        if abs(dy) > 0.01 or dx <= 0 or self.rot[pg][0]:
+            return None
+        px = 1 / max(1e-6, self.transform().m11())
+        box, h = self.to_scene(pg, run["bbox"]), 4.5 * px
+        return QRectF(box.right() + px - h, box.center().y() - h, 2 * h, 2 * h)
+
+    def _move_delta(self, d: QPointF) -> QPointF:
+        """Giữ Shift khi dời: chỉ dời thẳng theo chiều ngang hoặc chiều dọc."""
+        if QApplication.keyboardModifiers() & Qt.ShiftModifier:
+            return QPointF(d.x(), 0) if abs(d.x()) >= abs(d.y()) else QPointF(0, d.y())
+        return d
+
+    def _run_scale(self, i: int, sp: QPointF) -> float:
+        """Tỉ lệ phóng to dòng chữ theo chỗ đang kéo ô vuông bên phải (giữ nguyên đầu dòng)."""
+        r = self.drag_run["bbox"]
+        x = self.to_page(i, sp, clamp=False).x
+        return max(0.25, min(6.0, (x - r.x0) / max(1.0, r.width)))
+
+    @staticmethod
+    def _scaled_box(run: dict, s: float) -> pymupdf.Rect:
+        r, base = run["bbox"], run["origin"].y
+        return pymupdf.Rect(r.x0, base - (base - r.y0) * s, r.x0 + r.width * s, base + (r.y1 - base) * s)
 
     def _clamp_to_page(self, i: int, sp: QPointF) -> QPointF:
         r = self.rects[i]
@@ -1386,8 +1424,14 @@ class Viewer(QGraphicsView):
             # bấm vào một dòng chữ rồi kéo = dời dòng đó (giữ Ctrl: dời cả đoạn văn);
             # bấm ở chỗ trống rồi kéo = quét khung quanh nhiều dòng để sửa cả vùng
             page = self.model.doc[i]
-            run = tools.text_run_at(page, self.to_page(i, sp))
             self.drag_run = None
+            hr = self.hover_run
+            handle = self._run_handle(*hr) if hr and hr[0] == i else None
+            if handle is not None and handle.adjusted(-3, -3, 3, 3).contains(sp):
+                self.drag_run = dict(hr[1])          # nắm ô vuông bên phải: kéo để phóng to / thu nhỏ dòng chữ
+                self.drag_run["_group"], self.drag_run["_scale"] = [hr[1]], True
+                return
+            run = tools.text_run_at(page, self.to_page(i, sp))
             if run is not None:
                 self.drag_run = dict(run)
                 self.drag_run["_group"] = tools.paragraph_runs(page, run) if e.modifiers() & Qt.ControlModifier else [run]
@@ -1461,10 +1505,20 @@ class Viewer(QGraphicsView):
                     self.dicts[i] = tools.text_dict(self.model.doc[i])
                 run = tools.text_run_at(self.model.doc[i], self.to_page(i, sp), d=self.dicts[i])
             new = (i, run) if run else None
+            old = self.hover_run
+            handle = self._run_handle(*old) if old and old[0] == i else None
+            if handle is not None and handle.adjusted(-3, -3, 3, 3).contains(sp):
+                new = old                            # đang trỏ vào ô vuông (nhô ra ngoài dòng chữ): giữ dòng đó
             if (new is None) != (self.hover_run is None) or (new and self.hover_run and
                                                              new[1]["bbox"] != self.hover_run[1]["bbox"]):
                 self.hover_run = new
                 self.viewport().update()
+            on_handle = new is not None and self._run_handle(*new) is not None \
+                and self._run_handle(*new).adjusted(-3, -3, 3, 3).contains(sp)
+            self.viewport().setCursor(Qt.SizeHorCursor if on_handle else Qt.SizeAllCursor if new else Qt.PointingHandCursor)
+            if new and new is not old:
+                self.message.emit("Bấm để sửa chữ · kéo để dời dòng (giữ Shift: dời thẳng ngang / dọc, Ctrl: dời cả đoạn) · "
+                                  "kéo ô vuông bên phải để phóng to / thu nhỏ dòng chữ.")
             return
         if self.press is None:
             return
@@ -1648,9 +1702,21 @@ class Viewer(QGraphicsView):
             self.set_tool("hand")
             self.signRequested.emit(i, rect)
         elif tool == "edittext":
+            if self.drag_run and self.drag_run.get("_scale"):
+                run, s = self.drag_run, self._run_scale(i, sp)
+                if not small and abs(s - 1) > 0.02:
+                    with self.model.edit(i):
+                        tools.move_text_runs(self.model.doc[i], run["_group"], 0, 0, scale=s)
+                        self.model.fonts_added = True
+                    self.message.emit(f"Đã đổi cỡ chữ của dòng: {run['size']:.1f} → {run['size'] * s:.1f} pt. "
+                                      "Ctrl+Z để hoàn tác.")
+                self.drag_run = None
+                self.hover_run = None
+                return
             if not small and self.drag_run:
                 group = self.drag_run["_group"]
-                d = b - a
+                q = self._move_delta(QPointF(b.x - a.x, b.y - a.y))
+                d = pymupdf.Point(q.x(), q.y())
                 with self.model.edit(i):
                     used = tools.move_text_runs(self.model.doc[i], group, d.x, d.y)
                     self.model.fonts_added = True
@@ -1766,9 +1832,12 @@ class Viewer(QGraphicsView):
                                     + "\n\nChưa có gì bị thay đổi.")
             return
         self.hover_run = None
+        if self.tool != "edittext" and segs and tools.segs_text(segs).strip():
+            self.set_tool("edittext")            # sửa từ menu chuột phải: chuyển sang công cụ sửa chữ để dời / đổi cỡ ngay
         if used:
             self.message.emit(f"Đã sửa chữ (phông thay thế: {used})."
-                              + (f" Chữ dài hơn bề rộng dòng nên đã xuống thành {n} dòng." if n > 1 else ""))
+                              + (f" Chữ dài hơn bề rộng dòng nên đã xuống thành {n} dòng." if n > 1 else "")
+                              + " Kéo dòng chữ để dời, kéo ô vuông bên phải để phóng to / thu nhỏ.")
 
     def mouseDoubleClickEvent(self, e):
         if self.tool == "hand" and e.button() == Qt.LeftButton:
