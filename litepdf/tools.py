@@ -1317,17 +1317,19 @@ def paragraph_runs(page, run: dict, d: dict | None = None) -> list[dict]:
     return sorted(para, key=lambda r: r["origin"].y)
 
 
-def move_text_runs(page, runs: list[dict], dx: float, dy: float) -> str:
-    """Dời các dòng chữ gốc đi (dx, dy) điểm: xoá chữ ở chỗ cũ rồi viết lại đúng kiểu chữ (đậm, nghiêng, màu) ở chỗ mới."""
+def move_text_runs(page, runs: list[dict], dx: float, dy: float, scale: float = 1.0) -> str:
+    """Dời các dòng chữ gốc đi (dx, dy) điểm: xoá chữ ở chỗ cũ rồi viết lại đúng kiểu chữ (đậm, nghiêng, màu) ở chỗ mới.
+    scale: phóng to / thu nhỏ cỡ chữ của dòng (giữ nguyên đầu dòng và đường chân chữ)."""
     plans = []
     for r in runs:
-        pieces = rich_lines(r, list(r["segs"]), r["size"], None)[0]
-        plans.append((r, pieces))
-    for r, _ in plans:
+        size = max(2.0, r["size"] * scale)
+        pieces = rich_lines(r, list(r["segs"]), size, None)[0]
+        plans.append((r, pieces, size))
+    for r, _p, _s in plans:
         replace_text_run(page, r, "")
     used = ""
-    for r, pieces in plans:
-        used = write_pieces(page, r["origin"] + (dx, dy), pieces, r["size"]) or used
+    for r, pieces, size in plans:
+        used = write_pieces(page, r["origin"] + (dx, dy), pieces, size) or used
     return used
 
 
