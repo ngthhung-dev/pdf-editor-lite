@@ -964,9 +964,19 @@ class Viewer(QGraphicsView):
             self.gfx[i] = tools.page_graphics(self.model.doc[i], self._words(i))
         return self.gfx[i]
 
-    def _image_or_graphic_at(self, i: int, pt) -> dict | None:
-        """Hình ảnh tại điểm pt; không có thì hình vẽ bằng nét (mã vạch, mã QR…) tại đó."""
-        hit = tools.image_at(self._images(i), pt)
+    def _image_or_graphic_at(self, i: int, pt, click: bool = False) -> dict | None:
+        """Hình ảnh tại điểm pt; không có thì hình vẽ bằng nét (mã vạch, mã QR…) tại đó.
+        click: bấm chuột trái để chọn. Ảnh nền phủ gần kín trang (nền hoá đơn, giấy có hoa văn…) thì bỏ qua khi trang có
+        chữ, không thì bấm vào đâu trên trang cũng chọn trúng ảnh nền và không bỏ chọn được; bản scan (cả trang là ảnh,
+        không có chữ) vẫn chọn được, bấm lần nữa thì bỏ chọn."""
+        ims = self._images(i)
+        if click:
+            area = abs(self.model.doc[i].rect)
+            if any(abs(d["bbox"]) >= 0.9 * area for d in ims) and self._can_auto_ocr(i):
+                self.auto_ocr(i)
+            if self._words(i):
+                ims = [d for d in ims if abs(d["bbox"]) < 0.9 * area]
+        hit = tools.image_at(ims, pt)
         if hit is None and self._can_auto_ocr(i):
             self.auto_ocr(i)                     # trang chữ dạng nét: đọc chữ trước để không nhầm dòng chữ là hình vẽ
         return hit or tools.image_at(self._graphics(i), pt)
@@ -1365,7 +1375,9 @@ class Viewer(QGraphicsView):
             if hit:                      # nắm vào ảnh đang chọn: dời / co giãn (góc) / xoay (nút tròn phía trên)
                 self._img_drag_start(self.sel_image[0], sp, hit)
                 return
-        if i is None:
+        if i is None:                            # bấm ra ngoài trang (vùng xám): bỏ chọn chữ / hình đang chọn
+            if self.sel_image or self.sel_rects or self.sel_text:
+                self.clear_selection()
             return
         self.press, self.press_page = sp, i
         if self.tool == "ink":
@@ -1497,6 +1509,8 @@ class Viewer(QGraphicsView):
                 except tools.ImageEditError as ex:
                     self.message.emit(str(ex))
                     QMessageBox.information(self, "PDF Editor Lite", str(ex))
+            elif abs(d["info"]["bbox"]) >= 0.9 * abs(self.model.doc[d["i"]].rect):
+                self.clear_selection()           # ảnh phủ cả trang (bản scan) đang chọn: bấm lần nữa là bỏ chọn
             return
         if self.pan:
             start, _h, _v, i, sp0 = self.pan
@@ -1532,7 +1546,7 @@ class Viewer(QGraphicsView):
         if tool == "select":
             if small:  # bấm một lần (không kéo): chọn hình ảnh (hoặc hình vẽ bằng nét: mã vạch, mã QR…) tại đó nếu có
                 self.sel_rects, self.sel_text = [], ""
-                hit = self._image_or_graphic_at(i, a)
+                hit = self._image_or_graphic_at(i, a, click=True)
                 if hit:
                     self._select_image(i, hit)
                     return
