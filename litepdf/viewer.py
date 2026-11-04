@@ -1629,10 +1629,14 @@ class Viewer(QGraphicsView):
             start, _h, _v, i, sp0 = self.pan
             self.pan = None
             self.viewport().setCursor(Qt.OpenHandCursor)
-            if (e.position() - start).manhattanLength() < 4 and i is not None:
-                pt = self.to_page(i, sp0)
-                if not self._click_widget(i, pt):
-                    self._click_link(i, pt)
+            if (e.position() - start).manhattanLength() < 4:
+                # công cụ bàn tay: bấm (không kéo) là bỏ chọn hình / chữ đã chọn trước đó (vd. chọn qua menu chuột phải)
+                if self.sel_image or self.sel_rects or self.sel_text:
+                    self.clear_selection()
+                if i is not None:
+                    pt = self.to_page(i, sp0)
+                    if not self._click_widget(i, pt):
+                        self._click_link(i, pt)
             return
         if self.annot_mode and self.annot:
             if getattr(self, "annot_moved", False):
