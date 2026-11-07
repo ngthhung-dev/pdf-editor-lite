@@ -865,7 +865,17 @@ class SignDialog(QDialog):
         self.session: signing.TokenSession | None = None
         self.certs: list[dict] = []
         self.info: dict = {}
-        lay = QVBoxLayout(self)
+        # nội dung nằm trong vùng cuộn, nút Ký / Huỷ luôn ở đáy hộp: màn hình thấp (laptop, tỉ lệ 125–150%) vẫn bấm được
+        outer = QVBoxLayout(self)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        content = QWidget()
+        self._scroll.setWidget(content)
+        outer.addWidget(self._scroll, 1)
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(0, 0, 4, 0)
 
         src = QGroupBox("Chứng thư số")
         sl = QVBoxLayout(src)
@@ -1114,14 +1124,33 @@ class SignDialog(QDialog):
         self.location.textChanged.connect(lambda *_: self._refresh_preview())
         self.g_show.setVisible(visible or bool(empty_fields))
         lay.addWidget(self.g_show)
-        if visible or empty_fields:
-            self.setMinimumWidth(840)
+        if (visible or empty_fields) and self._screen_area().width() >= 1100:
+            # có khung chữ ký, màn hình đủ rộng: đặt "Chứng thư số" và "Thông tin chữ ký" cạnh nhau cho hộp thấp bớt
+            lay.removeWidget(src)
+            lay.removeWidget(g)
+            top = QHBoxLayout()
+            top.addWidget(src, 11)
+            top.addWidget(g, 9)
+            lay.insertLayout(0, top)
+            self.setMinimumWidth(min(980, self._screen_area().width() - 30))
+        elif visible or empty_fields:
+            self.setMinimumWidth(min(840, self._screen_area().width() - 30))
+        lay.addStretch(1)
 
-        lay.addWidget(_buttons(self, "Ký"))
+        outer.addWidget(_buttons(self, "Ký"))
         (self.r_tok if cfg.get("sign_source") == "token" else self.r_pfx).setChecked(True)
         self.r_pfx.toggled.connect(self._toggle)
         self._toggle()
         self._refresh_preview()
+        content.adjustSize()
+        need = content.sizeHint()
+        fit_dialog(self, max(self.minimumWidth(), need.width() + 40), need.height() + 70)
+
+    def _screen_area(self):
+        from PySide6.QtGui import QGuiApplication
+        p = self.parentWidget()
+        s = (p.screen() if p is not None else None) or QGuiApplication.primaryScreen()
+        return s.availableGeometry()
 
     # ---------------------------------------------- bố trí các dòng thông tin + xem trước
     def _label_item(self, li: QListWidgetItem) -> None:
