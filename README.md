@@ -93,6 +93,14 @@ AI dịch chạy trên máy: mở mục **PDF Editor Lite – Cài AI dịch tr�
 
 Gỡ cài đặt: `sudo apt remove pdf-editor-lite`.
 
+### Cập nhật bản mới
+Trong app chọn **Trợ giúp → Kiểm tra cập nhật…**. App tìm bản mới nhất trên trang phát hành GitHub, tải đúng bộ cài cho máy đang dùng rồi cài luôn:
+- Windows: hỏi quyền quản trị (UAC), cài ngầm giữ nguyên các thành phần đã chọn lần trước, xong tự mở lại app.
+- macOS: mở trình cài đặt của macOS, bấm Tiếp tục / Cài đặt như lần đầu.
+- Linux: hỏi mật khẩu quản trị rồi cài gói `.deb`; đóng và mở lại app để dùng bản mới.
+
+Trước khi cài, app đóng lại và hỏi lưu các file đang sửa. Bản mới chưa có bộ cài cho loại máy đang dùng thì app báo và cho mở trang phát hành.
+
 ### Những thứ phải tự cài / tự nhập
 - Driver của USB token ký số (do nhà cung cấp chữ ký số phát hành).
 - Chứng thư gốc tin cậy để kiểm tra chữ ký (Ký & Bảo mật → Mở thư mục chứng thư gốc tin cậy).

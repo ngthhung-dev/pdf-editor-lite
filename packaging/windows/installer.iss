@@ -154,6 +154,8 @@ Filename: "{code:OllamaExe}"; Parameters: "pull {#Model}"; Components: ollama\mo
 #endif
 Filename: "{app}\{#AppExe}"; Parameters: "--background"; Tasks: faststart; Flags: nowait runasoriginaluser
 Filename: "{app}\{#AppExe}"; Description: "Mở {#AppName}"; Flags: nowait postinstall skipifsilent
+; cap nhat tu trong app (Tro giup > Kiem tra cap nhat): bo cai chay an voi /LITEPDFRELAUNCH, cai xong thi mo lai app
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: RelaunchAfterUpdate
 
 [Code]
 function PdfShellHandler(Kind: String): String;
@@ -184,6 +186,19 @@ end;
 function HasPdfShellHandler(Kind: String): Boolean;
 begin
   Result := PdfShellHandler(Kind) <> '';
+end;
+
+function RelaunchAfterUpdate(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/LITEPDFRELAUNCH') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
 end;
 
 function HasLibreOffice(): Boolean;

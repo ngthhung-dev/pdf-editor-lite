@@ -8,9 +8,9 @@ import tempfile
 from pathlib import Path
 
 import pymupdf
-from PySide6.QtCore import QEvent, QEventLoop, QMimeData, QObject, QPoint, QPointF, QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import (QAction, QActionGroup, QColor, QCursor, QDrag, QIcon, QImage, QKeySequence, QMouseEvent, QPainter,
-                           QPalette, QPixmap)
+from PySide6.QtCore import QEvent, QEventLoop, QMimeData, QObject, QPoint, QPointF, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import (QAction, QActionGroup, QColor, QCursor, QDesktopServices, QDrag, QIcon, QImage, QKeySequence,
+                           QMouseEvent, QPainter, QPalette, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QColorDialog, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout,
                                QFileDialog, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QMainWindow, QMenu, QMessageBox, QProgressDialog, QSizePolicy, QSpinBox,
@@ -1245,6 +1245,9 @@ class MainWindow(QMainWindow):
         m = mb.addMenu("Trợ &giúp")
         A("Hướng dẫn sử dụng", self.open_manual, doc=False, menu=m, guard=False)
         A("Danh sách phím tắt", self.show_shortcuts, doc=False, menu=m, guard=False)
+        m.addSeparator()
+        A("Kiểm tra cập nhật…", self.check_update, doc=False, menu=m, guard=False,
+          tip="Tìm bản mới nhất trên GitHub, tải về và cài đặt luôn")
         A("Giới thiệu", self.about, doc=False, menu=m, guard=False)
         self._apply_shortcuts()
 
@@ -3122,6 +3125,160 @@ class MainWindow(QMainWindow):
             return ""
         return ("<h3 style='color:#1a56c4;margin:12px 0 2px 0'>Thời gian khởi động lần này: "
                 f"{prev:.1f} giây</h3><table>" + "".join(rows) + "</table>")
+
+    # ---------------------------------------------------------------- cập nhật bản mới
+    def _run_bg(self, fn, on_tick=None):
+        """Chạy fn ở luồng phụ (mạng chậm không làm treo cửa sổ), chờ xong rồi trả kết quả / ném lại lỗi."""
+        import threading
+        box: dict = {}
+
+        def work():
+            try:
+                box["ok"] = fn()
+            except BaseException as e:               # noqa: BLE001  (chuyển lỗi về luồng giao diện)
+                box["err"] = e
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+        while th.is_alive():
+            QApplication.processEvents(QEventLoop.AllEvents, 50)
+            if on_tick:
+                on_tick()
+            th.join(0.05)
+        if "err" in box:
+            raise box["err"]
+        return box.get("ok")
+
+    def check_update(self) -> None:
+        """Trợ giúp → Kiểm tra cập nhật: tìm bản mới trên GitHub, tải bộ cài đúng loại máy rồi cài đặt."""
+        from . import updater
+        key = updater.platform_key()
+        self.busy()
+        try:
+            info = self._run_bg(lambda: updater.find_update(VERSION, key))
+        except updater.UpdateError as e:
+            self.done()
+            self.error(f"Không kiểm tra được bản cập nhật.\n\n{e}")
+            return
+        finally:
+            self.done()
+        page = info.get("page") or updater.RELEASES_URL
+        if info["status"] == "latest":
+            self.info(f"Đang dùng bản mới nhất ({VERSION}).")
+            return
+        if info["status"] == "no_asset" or not key:
+            what = updater.PLATFORM_TEXT.get(key, "loại máy này")
+            if QMessageBox.question(self, "Kiểm tra cập nhật",
+                                    f"Đã có bản {info['latest']} (máy đang dùng bản {VERSION}), nhưng bản này chưa có bộ "
+                                    f"cài cho {what}.\n\nMở trang phát hành trên GitHub để xem?") == QMessageBox.Yes:
+                QDesktopServices.openUrl(QUrl(page))
+            return
+        ver, asset = info["version"], info["asset"]
+        size = f"{asset['size'] / 1048576:,.0f} MB".replace(",", ".") if asset["size"] else "chưa rõ dung lượng"
+        notes = info.get("notes") or ""
+        if len(notes) > 700:
+            notes = notes[:700].rsplit("\n", 1)[0] + "\n…"
+        text = (f"Đã có bản mới: {ver} (máy đang dùng bản {VERSION}).\n\n"
+                f"Bộ cài cho {updater.PLATFORM_TEXT[key]}: {asset['name']} ({size}).")
+        if info.get("skipped"):
+            text += (f"\n\nBản mới nhất {info['skipped']} chưa có bộ cài cho {updater.PLATFORM_TEXT[key]} nên sẽ cài bản {ver}.")
+        if notes:
+            text += "\n\n" + notes
+        if not tools.FROZEN:
+            box = QMessageBox(QMessageBox.Information, "Kiểm tra cập nhật",
+                              text + "\n\nApp đang chạy từ mã nguồn nên không tự cài được: cập nhật mã nguồn (git pull) "
+                                     "hoặc tải bộ cài trên trang phát hành.", QMessageBox.NoButton, self)
+            b_page = box.addButton("Mở trang phát hành", QMessageBox.AcceptRole)
+            box.addButton("Đóng", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is b_page:
+                QDesktopServices.openUrl(QUrl(page))
+            return
+        box = QMessageBox(QMessageBox.Information, "Kiểm tra cập nhật", text, QMessageBox.NoButton, self)
+        b_go = box.addButton("Tải về và cài đặt", QMessageBox.AcceptRole)
+        b_page = box.addButton("Xem trang phát hành", QMessageBox.HelpRole)
+        box.addButton("Để sau", QMessageBox.RejectRole)
+        box.setDefaultButton(b_go)
+        box.exec()
+        if box.clickedButton() is b_page:
+            QDesktopServices.openUrl(QUrl(page))
+            return
+        if box.clickedButton() is not b_go:
+            return
+        path = self._download_update(updater, asset, ver)
+        if path:
+            self._install_update(updater, path, key, ver)
+
+    def _download_update(self, updater, asset: dict, ver: str) -> str | None:
+        prog = QProgressDialog(f"Đang tải bản {ver}…", "Huỷ", 0, 100, self)
+        prog.setWindowTitle("Cập nhật " + APP_NAME)
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.setAutoClose(False)
+        prog.setAutoReset(False)
+        prog.setValue(0)
+        state = {"got": 0, "total": asset.get("size") or 0}
+
+        def tick():
+            got, total = state["got"], state["total"]
+            if total:
+                prog.setValue(min(100, int(got * 100 / total)))
+                prog.setLabelText(f"Đang tải bản {ver}…  {got / 1048576:,.0f} / {total / 1048576:,.0f} MB".replace(",", "."))
+        try:
+            path = self._run_bg(lambda: updater.download(asset, lambda g, t: state.update(got=g, total=t or state["total"]),
+                                                         prog.wasCanceled), tick)
+        except updater.UpdateError as e:
+            prog.close()
+            if not prog.wasCanceled():
+                self.error(str(e))
+            return None
+        prog.close()
+        return path
+
+    def _install_update(self, updater, path: str, key: str, ver: str) -> None:
+        if key == "linux-deb":
+            cmd = updater.install_command(path, key)
+            if not cmd:                          # không có pkexec: mở bằng trình cài phần mềm của máy
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+                self.info(f"Đã tải bộ cài bản {ver}:\n{path}\n\nMáy chưa có pkexec nên app mở file bằng trình cài phần mềm "
+                          "của máy: bấm Cài đặt, xong thì đóng và mở lại PDF Editor Lite.")
+                return
+            if QMessageBox.question(self, "Cập nhật " + APP_NAME,
+                                    f"Đã tải xong bản {ver}. Cài đặt ngay?\n\nMáy sẽ hỏi mật khẩu quản trị để cài.") != QMessageBox.Yes:
+                return
+            import subprocess
+            self.busy()
+            try:
+                r = self._run_bg(lambda: subprocess.run(cmd, capture_output=True, text=True))
+            finally:
+                self.done()
+            if r.returncode != 0:
+                err = (r.stderr or r.stdout or "").strip()[-600:]
+                self.error(f"Chưa cài được bản {ver}" + (f":\n\n{err}" if err else " (đã huỷ hoặc không cho quyền quản trị)."))
+                return
+            self.info(f"Đã cài xong bản {ver}. Đóng rồi mở lại PDF Editor Lite để dùng bản mới.")
+            return
+        mac = key.startswith("mac")
+        how = ("Trình cài đặt của macOS sẽ mở ra: bấm Tiếp tục / Cài đặt và nhập mật khẩu máy khi được hỏi."
+               if mac else "Windows sẽ hỏi quyền quản trị: bấm Có (Yes). App tự mở lại khi cài xong.")
+        if QMessageBox.question(self, "Cập nhật " + APP_NAME,
+                                f"Đã tải xong bản {ver}. Cài đặt ngay?\n\nPDF Editor Lite sẽ đóng lại để cài (có hỏi lưu các "
+                                f"file đang sửa). {how}") != QMessageBox.Yes:
+            return
+        wins = [w for w in _WINDOWS if not w._primary] + [w for w in _WINDOWS if w._primary]
+        for w in wins:                           # hỏi lưu từng tài liệu đang sửa trước khi đóng app
+            for i in range(w.tabs.count()):
+                if not w.maybe_save(w.tabs.widget(i)):
+                    return
+        try:
+            updater.launch_installer(path, key)
+        except (OSError, updater.UpdateError) as e:
+            self.error(f"Chưa chạy được bộ cài bản {ver} (có thể chưa cho phép quyền quản trị).\n\n"
+                       f"File bộ cài đã tải ở:\n{path}\n\nChi tiết: {e}")
+            return
+        for w in wins:                           # đã hỏi lưu ở trên: phần chưa lưu là người dùng chọn bỏ
+            for i in range(w.tabs.count()):
+                w.tabs.widget(i).own_model.dirty = False
+        self.quit_app()
 
     def about(self):
         d = ReportDialog(self, "Giới thiệu",
