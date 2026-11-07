@@ -6,6 +6,7 @@ import os
 import sys
 import time
 
+import pymupdf
 from PySide6.QtCore import QEvent, QPointF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QImage, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut, qRgb
 from PySide6.QtWidgets import (QFrame, QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDialog,
@@ -853,7 +854,8 @@ class SignatureLibrary(QDialog):
 
 # -------------------------------------------------------------------- ký số
 class SignDialog(QDialog):
-    def __init__(self, parent, cfg: Config, visible: bool, empty_fields: list[str] | None = None):
+    def __init__(self, parent, cfg: Config, visible: bool, empty_fields: list[str] | None = None,
+                 box_size: tuple[float, float] | None = None):
         super().__init__(parent)
         self.setWindowTitle("Ký số tài liệu")
         self.setMinimumWidth(560)
@@ -950,19 +952,104 @@ class SignDialog(QDialog):
         fl.addRow("", self.certify)
         lay.addWidget(g)
 
+        self.box_size = box_size or (220.0, 80.0)
         self.g_show = QGroupBox("Hình thức hiển thị")
-        hl = QFormLayout(self.g_show)
+        gl = QHBoxLayout(self.g_show)
+        left = QVBoxLayout()
+        gl.addLayout(left, 3)
+        hl = QFormLayout()
+        # các dòng thông tin: tích để hiện, kéo thả (hoặc nút lên / xuống) để đổi thứ tự, sửa nhãn từng dòng
+        left.addWidget(QLabel("Các dòng thông tin (tích để hiện, kéo thả hoặc bấm ▲ ▼ để đổi thứ tự):"))
+        lrow = QHBoxLayout()
+        self.line_list = QListWidget()
+        self.line_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.line_list.setDefaultDropAction(Qt.MoveAction)
+        self.line_list.setMaximumHeight(150)
+        lrow.addWidget(self.line_list, 1)
+        col = QVBoxLayout()
+        self.b_up, self.b_down = QPushButton("▲"), QPushButton("▼")
+        for b, step in ((self.b_up, -1), (self.b_down, 1)):
+            b.setFixedWidth(32)
+            b.setToolTip("Chuyển dòng đang chọn lên trên" if step < 0 else "Chuyển dòng đang chọn xuống dưới")
+            b.clicked.connect(lambda _=False, s=step: self._move_line(s))
+            col.addWidget(b)
+        col.addStretch()
+        lrow.addLayout(col)
+        left.addLayout(lrow)
+        frow = QHBoxLayout()
+        frow.addWidget(QLabel("Nhãn:"))
+        self.line_label = QLineEdit()
+        self.line_label.setPlaceholderText("Để trống: chỉ hiện nội dung, không có nhãn")
+        frow.addWidget(self.line_label, 1)
+        self.custom_lb = QLabel("Nội dung:")
+        frow.addWidget(self.custom_lb)
+        self.custom_text = QLineEdit()
+        self.custom_text.setPlaceholderText("Ví dụ: Giám đốc")
+        frow.addWidget(self.custom_text, 1)
+        left.addLayout(frow)
+        left.addLayout(hl)
+        layout = cfg.get("sign_layout")
+        if not layout:                           # thiết lập của bản cũ (tích Người ký / Đơn vị / Thời gian / Lý do)
+            old = {"name": cfg.get("show_name", True), "org": cfg.get("show_org", True),
+                   "time": cfg.get("show_time", True), "reason": cfg.get("show_reason", False)}
+            layout = [dict(it, on=old.get(it["key"], it["on"])) for it in signing.DEFAULT_SIGN_LAYOUT]
+        for it in signing.normalize_layout(layout):
+            li = QListWidgetItem()
+            li.setData(Qt.UserRole, dict(it))
+            li.setFlags(li.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
+            li.setFlags(li.flags() & ~Qt.ItemIsDropEnabled)
+            li.setCheckState(Qt.Checked if it["on"] else Qt.Unchecked)
+            self.line_list.addItem(li)
+            self._label_item(li)
+        self.line_list.itemChanged.connect(lambda *_: self._refresh_preview())
+        self.line_list.model().rowsMoved.connect(lambda *_: self._refresh_preview())
+        self.line_list.currentItemChanged.connect(self._select_line)
+        self.line_label.textEdited.connect(self._edit_line)
+        self.custom_text.textEdited.connect(self._edit_line)
+        self.line_list.setCurrentRow(0)
         row = QHBoxLayout()
-        self.c_name = QCheckBox("Người ký")
-        self.c_org = QCheckBox("Đơn vị")
-        self.c_time = QCheckBox("Thời gian")
-        self.c_reason = QCheckBox("Lý do")
-        for c, key, dv in ((self.c_name, "show_name", True), (self.c_org, "show_org", True),
-                           (self.c_time, "show_time", True), (self.c_reason, "show_reason", False)):
-            c.setChecked(cfg.get(key, dv))
-            row.addWidget(c)
+        self.img_pos = QComboBox()
+        for txt, v in (("Tự động", "auto"), ("Bên trái chữ", "left"), ("Bên phải chữ", "right"), ("Phía trên chữ", "top"),
+                       ("Phía dưới chữ", "bottom")):
+            self.img_pos.addItem(txt, v)
+        self.img_pos.setCurrentIndex(max(0, self.img_pos.findData(cfg.get("sign_img_pos", "auto"))))
+        row.addWidget(QLabel("Ảnh:"))
+        row.addWidget(self.img_pos)
+        self.align = QComboBox()
+        for txt, v in (("Căn trái", "left"), ("Căn giữa", "center"), ("Căn phải", "right")):
+            self.align.addItem(txt, v)
+        self.align.setCurrentIndex(max(0, self.align.findData(cfg.get("sign_align", "left"))))
+        row.addWidget(QLabel("Chữ:"))
+        row.addWidget(self.align)
+        self.font_size = QDoubleSpinBox()
+        self.font_size.setRange(0, 24)
+        self.font_size.setSingleStep(0.5)
+        self.font_size.setDecimals(1)
+        self.font_size.setSpecialValueText("Tự động")
+        self.font_size.setSuffix(" pt")
+        self.font_size.setValue(float(cfg.get("sign_font_size", 0) or 0))
+        self.font_size.setToolTip("Tự động: chữ lớn nhất vừa khung. Chọn cỡ cố định: chữ dài quá khung vẫn tự thu nhỏ.")
+        row.addWidget(QLabel("Cỡ:"))
+        row.addWidget(self.font_size)
         row.addStretch()
-        hl.addRow("Dòng chữ:", row)
+        hl.addRow("Bố trí:", row)
+        row = QHBoxLayout()
+        self.sig_color = QColor(cfg.get("sign_color", "#bf0d0d"))
+        self.b_color = QPushButton()
+        self.b_color.setFixedWidth(42)
+        self.b_color.setToolTip("Màu chữ và viền khung")
+        self.b_color.clicked.connect(self._pick_sig_color)
+        self._paint_color_btn()
+        row.addWidget(QLabel("Màu:"))
+        row.addWidget(self.b_color)
+        self.c_border = QCheckBox("Viền khung")
+        self.c_border.setChecked(cfg.get("sign_border", True))
+        self.c_bold = QCheckBox("Dòng đầu in đậm")
+        self.c_bold.setChecked(cfg.get("sign_bold_first", False))
+        row.addWidget(self.c_border)
+        row.addWidget(self.c_bold)
+        row.addStretch()
+        hl.addRow("Kiểu:", row)
         row = QHBoxLayout()
         self.img = QComboBox()
         self.img.addItem("Không dùng ảnh", "")
@@ -976,13 +1063,155 @@ class SignDialog(QDialog):
         row.addWidget(self.img, 1)
         row.addWidget(b)
         hl.addRow("Ảnh chữ ký/con dấu:", row)
+        # khung xem trước: đúng tỉ lệ ô chữ ký đã kéo trên trang, cập nhật ngay khi đổi thiết lập
+        right = QVBoxLayout()
+        gl.addLayout(right, 2)
+        right.addWidget(QLabel("Xem trước:"))
+        self.preview = QLabel()
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setMinimumSize(260, 150)
+        self.preview.setStyleSheet("background:#e8eaed;border:1px solid #dadce0;")
+        right.addWidget(self.preview, 1)
+        self.preview_note = QLabel("")
+        self.preview_note.setWordWrap(True)
+        self.preview_note.setStyleSheet("color:#5f6368;font-size:11px")
+        right.addWidget(self.preview_note)
+        for w in (self.img_pos, self.align, self.img):
+            w.currentIndexChanged.connect(lambda *_: self._refresh_preview())
+        self.font_size.valueChanged.connect(lambda *_: self._refresh_preview())
+        for c in (self.c_border, self.c_bold):
+            c.toggled.connect(lambda *_: self._refresh_preview())
+        self.reason.textChanged.connect(lambda *_: self._refresh_preview())
+        self.location.textChanged.connect(lambda *_: self._refresh_preview())
         self.g_show.setVisible(visible or bool(empty_fields))
         lay.addWidget(self.g_show)
+        if visible or empty_fields:
+            self.setMinimumWidth(840)
 
         lay.addWidget(_buttons(self, "Ký"))
         (self.r_tok if cfg.get("sign_source") == "token" else self.r_pfx).setChecked(True)
         self.r_pfx.toggled.connect(self._toggle)
         self._toggle()
+        self._refresh_preview()
+
+    # ---------------------------------------------- bố trí các dòng thông tin + xem trước
+    def _label_item(self, li: QListWidgetItem) -> None:
+        it = li.data(Qt.UserRole)
+        name = signing.SIGN_FIELD_NAMES[it["key"]]
+        if it["key"] == "custom":
+            shown = " ".join(x for x in (it.get("label", "").strip(), it.get("text", "").strip()) if x) or "(chưa nhập)"
+        else:
+            shown = (it["label"].strip() + ": …") if it["label"].strip() else "(không có nhãn)"
+        li.setText(f"{name}   —   {shown}")
+
+    def _items(self) -> list[QListWidgetItem]:
+        return [self.line_list.item(i) for i in range(self.line_list.count())]
+
+    def _move_line(self, step: int) -> None:
+        r = self.line_list.currentRow()
+        if r < 0 or not 0 <= r + step < self.line_list.count():
+            return
+        self.line_list.blockSignals(True)
+        li = self.line_list.takeItem(r)
+        self.line_list.insertItem(r + step, li)
+        self.line_list.blockSignals(False)
+        self.line_list.setCurrentRow(r + step)
+        self._refresh_preview()
+
+    def _select_line(self, li, _prev=None) -> None:
+        it = li.data(Qt.UserRole) if li else None
+        self.line_label.setEnabled(it is not None)
+        self.line_label.setText(it["label"] if it else "")
+        custom = bool(it and it["key"] == "custom")
+        self.custom_lb.setVisible(custom)
+        self.custom_text.setVisible(custom)
+        self.custom_text.setText(it.get("text", "") if custom else "")
+        if it:
+            self.b_up.setEnabled(self.line_list.row(li) > 0)
+            self.b_down.setEnabled(self.line_list.row(li) < self.line_list.count() - 1)
+
+    def _edit_line(self, *_):
+        li = self.line_list.currentItem()
+        if not li:
+            return
+        it = dict(li.data(Qt.UserRole))
+        it["label"] = self.line_label.text()
+        if it["key"] == "custom":
+            it["text"] = self.custom_text.text()
+            if it["text"].strip() and li.checkState() != Qt.Checked:
+                li.setCheckState(Qt.Checked)     # vừa gõ nội dung dòng tự nhập: tự bật dòng đó
+        self.line_list.blockSignals(True)
+        li.setData(Qt.UserRole, it)
+        self._label_item(li)
+        self.line_list.blockSignals(False)
+        self._refresh_preview()
+
+    def _paint_color_btn(self) -> None:
+        self.b_color.setStyleSheet(f"QPushButton{{background:{self.sig_color.name()};border:1px solid #80868b;"
+                                   "border-radius:3px;min-height:18px}}")
+
+    def _pick_sig_color(self) -> None:
+        c = QColorDialog.getColor(self.sig_color, self, "Màu chữ ký")
+        if c.isValid():
+            self.sig_color = c
+            self._paint_color_btn()
+            self._refresh_preview()
+
+    def sign_layout(self) -> list[dict]:
+        out = []
+        for li in self._items():
+            it = dict(li.data(Qt.UserRole))
+            it["on"] = li.checkState() == Qt.Checked
+            out.append(it)
+        return out
+
+    def _values(self, sample: bool = False) -> dict:
+        """Nội dung từng dòng. sample: chưa đọc chứng thư thì dùng chữ mẫu để xem trước."""
+        info = self.info or {}
+        tz = time.strftime("%z")
+        now = time.strftime("%d/%m/%Y %H:%M:%S") + (f" {tz[:3]}:{tz[3:]}" if tz else "")
+        v = {"name": info.get("cn", ""), "org": info.get("org", ""), "uid": info.get("uid", ""),
+             "issuer": info.get("issuer", ""), "time": now,
+             "reason": self.reason.text().strip(), "location": self.location.text().strip()}
+        if sample and not info:
+            v.update(name="(Tên người ký)", org="(Đơn vị)", uid="(Mã số)", issuer="(Nhà cung cấp)")
+        return v
+
+    def lines(self, sample: bool = False) -> list[str]:
+        return signing.sign_lines(self.sign_layout(), self._values(sample))
+
+    def appearance(self, width: float, height: float, sample: bool = False) -> bytes:
+        """Hình khung chữ ký theo thiết lập trong hộp (dùng cho cả xem trước và khi ký thật)."""
+        c = self.sig_color
+        return signing.make_appearance(width, height, self.lines(sample), self.img.currentData() or None,
+                                       border=self.c_border.isChecked(), color=(c.redF(), c.greenF(), c.blueF()),
+                                       image_pos=self.img_pos.currentData(), align=self.align.currentData(),
+                                       font_size=self.font_size.value() or None, bold_first=self.c_bold.isChecked())
+
+    def _refresh_preview(self) -> None:
+        if not hasattr(self, "preview"):
+            return
+        w, h = self.box_size
+        try:
+            doc = pymupdf.open("pdf", self.appearance(w, h, sample=True))
+            avail_w, avail_h = max(120, self.preview.width() - 16), max(80, self.preview.height() - 16)
+            z = min(avail_w / w, avail_h / h, 4.0)
+            pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(z * 2, z * 2), alpha=False)
+            doc.close()
+            img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
+            pm = QPixmap.fromImage(img)
+            pm.setDevicePixelRatio(2)
+            self.preview.setPixmap(pm)
+        except Exception as e:
+            self.preview.setText(f"Không xem trước được: {e}")
+        note = f"Khung {w * 25.4 / 72:.0f} × {h * 25.4 / 72:.0f} mm."
+        if not self.info:
+            note += " Chữ trong ngoặc là chữ mẫu: tên, đơn vị thật lấy từ chứng thư khi đọc chứng thư / khi ký."
+        self.preview_note.setText(note)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._refresh_preview()
 
     def _toggle(self):
         self.w_pfx.setEnabled(self.r_pfx.isChecked())
@@ -1066,6 +1295,7 @@ class SignDialog(QDialog):
         warn = "  <b style='color:#d93025'>ĐÃ HẾT HẠN</b>" if info.get("expired") else ""
         self.cert_lb.setText(f"Người ký: <b>{info['cn']}</b><br>Cấp bởi: {info['issuer']}<br>"
                              f"Hiệu lực: {info['not_before']:%d/%m/%Y} – {info['not_after']:%d/%m/%Y}{warn}")
+        self._refresh_preview()                  # xem trước với tên, đơn vị thật của chứng thư
 
     def accept(self):
         try:
@@ -1095,24 +1325,14 @@ class SignDialog(QDialog):
         c = self.cfg
         c["sign_source"] = "token" if self.r_tok.isChecked() else "pfx"
         c["sign_reason"], c["sign_location"], c["tsa_url"] = self.reason.text(), self.location.text(), self.tsa.text().strip()
-        c["show_name"], c["show_org"] = self.c_name.isChecked(), self.c_org.isChecked()
-        c["show_time"], c["show_reason"] = self.c_time.isChecked(), self.c_reason.isChecked()
+        c["sign_layout"] = self.sign_layout()
+        c["sign_img_pos"], c["sign_align"] = self.img_pos.currentData(), self.align.currentData()
+        c["sign_font_size"] = self.font_size.value()
+        c["sign_color"] = self.sig_color.name()
+        c["sign_border"], c["sign_bold_first"] = self.c_border.isChecked(), self.c_bold.isChecked()
         c["sign_image"] = self.img.currentData() or ""
         c.save()
         super().accept()
-
-    def lines(self) -> list[str]:
-        out = []
-        if self.c_name.isChecked():
-            out.append("Ký bởi: " + self.info.get("cn", ""))
-        if self.c_org.isChecked() and self.info.get("org") and self.info["org"] != self.info.get("cn"):
-            out.append("Đơn vị: " + self.info["org"])
-        if self.c_time.isChecked():
-            tz = time.strftime("%z")
-            out.append("Ngày ký: " + time.strftime("%d/%m/%Y %H:%M:%S") + (f" {tz[:3]}:{tz[3:]}" if tz else ""))
-        if self.c_reason.isChecked() and self.reason.text().strip():
-            out.append("Lý do: " + self.reason.text().strip())
-        return out
 
     def close_session(self):
         if self.session:

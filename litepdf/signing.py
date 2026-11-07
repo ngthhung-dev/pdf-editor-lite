@@ -198,9 +198,52 @@ class TokenSession:
 
 
 # ----------------------------------------------------------- khung chữ ký hiển thị
+# Các dòng thông tin có thể hiện trong khung chữ ký: (mã, nhãn mặc định). "custom" là dòng chữ tự nhập.
+SIGN_FIELDS = [("name", "Ký bởi"), ("org", "Đơn vị"), ("uid", "Mã số"), ("time", "Ngày ký"), ("reason", "Lý do"),
+               ("location", "Nơi ký"), ("issuer", "Cấp bởi"), ("custom", "")]
+SIGN_FIELD_NAMES = {"name": "Người ký", "org": "Đơn vị", "uid": "Mã số (MST / CCCD)", "time": "Thời gian ký",
+                    "reason": "Lý do ký", "location": "Nơi ký", "issuer": "Nhà cung cấp chứng thư", "custom": "Dòng tự nhập"}
+DEFAULT_SIGN_LAYOUT = [{"key": k, "label": lb, "on": k in ("name", "org", "time")} for k, lb in SIGN_FIELDS]
+
+
+def normalize_layout(items) -> list[dict]:
+    """Bố trí dòng đã lưu (có thể từ bản cũ, thiếu dòng mới) -> danh sách đủ mọi dòng, giữ thứ tự người dùng đã chọn."""
+    out, seen = [], set()
+    for it in items or []:
+        if isinstance(it, dict) and it.get("key") in dict(SIGN_FIELDS) and it["key"] not in seen:
+            seen.add(it["key"])
+            out.append({"key": it["key"], "label": str(it.get("label", dict(SIGN_FIELDS)[it["key"]])),
+                        "on": bool(it.get("on")), **({"text": str(it.get("text", ""))} if it["key"] == "custom" else {})})
+    for k, lb in SIGN_FIELDS:
+        if k not in seen:
+            out.append({"key": k, "label": lb, "on": False, **({"text": ""} if k == "custom" else {})})
+    return out
+
+
+def sign_lines(layout: list[dict], values: dict) -> list[str]:
+    """Các dòng chữ của khung chữ ký theo bố trí: 'Nhãn: giá trị' (nhãn để trống thì chỉ có giá trị).
+    Dòng không có giá trị (vd. chứng thư không ghi đơn vị) thì bỏ qua."""
+    out = []
+    for it in normalize_layout(layout):
+        if not it["on"]:
+            continue
+        val = (it.get("text") if it["key"] == "custom" else values.get(it["key"])) or ""
+        val = str(val).strip()
+        if it["key"] == "org" and val and val == str(values.get("name", "")).strip():
+            continue                             # đơn vị trùng tên người ký (chứng thư tổ chức): không lặp lại
+        if not val:
+            continue
+        label = it["label"].strip()
+        out.append(f"{label}: {val}" if label and it["key"] != "custom" else (f"{label} {val}".strip() if label else val))
+    return out
+
+
 def make_appearance(width: float, height: float, lines: list[str], image_path: str | None = None,
-                    border: bool = True, color=(0.75, 0.05, 0.05)) -> bytes:
-    """Dựng hình khung chữ ký (PDF 1 trang) gồm ảnh chữ ký và các dòng thông tin."""
+                    border: bool = True, color=(0.75, 0.05, 0.05), image_pos: str = "auto", align: str = "left",
+                    font_size: float | None = None, bold_first: bool = False) -> bytes:
+    """Dựng hình khung chữ ký (PDF 1 trang) gồm ảnh chữ ký và các dòng thông tin.
+    image_pos: 'auto' | 'left' | 'right' | 'top' | 'bottom'; align: 'left' | 'center' | 'right';
+    font_size: None = tự chọn cỡ lớn nhất vừa khung, số = cỡ cố định (vẫn tự thu nhỏ nếu không vừa)."""
     doc = pymupdf.open()
     page = doc.new_page(width=width, height=height)
     r = page.rect
@@ -210,12 +253,20 @@ def make_appearance(width: float, height: float, lines: list[str], image_path: s
     text_rect = r + (pad, pad, -pad, -pad)
     if image_path and os.path.exists(image_path):
         if lines:
-            if width >= height * 1.6:
+            pos = image_pos if image_pos in ("left", "right", "top", "bottom") else \
+                ("left" if width >= height * 1.6 else "top")
+            if pos == "left":
                 img_rect = pymupdf.Rect(pad, pad, width * 0.4, height - pad)
                 text_rect = pymupdf.Rect(width * 0.4 + pad, pad, width - pad, height - pad)
-            else:
+            elif pos == "right":
+                img_rect = pymupdf.Rect(width * 0.6, pad, width - pad, height - pad)
+                text_rect = pymupdf.Rect(pad, pad, width * 0.6 - pad, height - pad)
+            elif pos == "top":
                 img_rect = pymupdf.Rect(pad, pad, width - pad, height * 0.5)
                 text_rect = pymupdf.Rect(pad, height * 0.5, width - pad, height - pad)
+            else:
+                img_rect = pymupdf.Rect(pad, height * 0.5, width - pad, height - pad)
+                text_rect = pymupdf.Rect(pad, pad, width - pad, height * 0.5)
         else:
             img_rect = text_rect
         try:
@@ -225,11 +276,21 @@ def make_appearance(width: float, height: float, lines: list[str], image_path: s
     if lines:
         text = "\n".join(lines)
         font = tools.pick_font("arial", 0, text)
-        size = 11.0
+        bold = tools.pick_font("arial", 16, lines[0], bold=True) if bold_first else None
+        al = {"center": 1, "right": 2}.get(align, 0)
+        size = float(font_size) if font_size else 11.0
         while size > 3.5:
             tw = pymupdf.TextWriter(r, color=color)
             try:
-                left = tw.fill_textbox(text_rect, text, font=font, fontsize=size, lineheight=1.15)
+                if bold is not None:             # dòng đầu (thường là tên người ký) in đậm
+                    left = tw.fill_textbox(text_rect, lines[0], font=bold, fontsize=size, lineheight=1.15, align=al)
+                    if not left and len(lines) > 1:
+                        y = tw.last_point.y if tw.last_point else text_rect.y0
+                        rest = pymupdf.Rect(text_rect.x0, y + 0.3 * size, text_rect.x1, text_rect.y1)
+                        left = ["x"] if rest.is_empty else tw.fill_textbox(rest, "\n".join(lines[1:]), font=font,
+                                                                           fontsize=size, lineheight=1.15, align=al)
+                else:
+                    left = tw.fill_textbox(text_rect, text, font=font, fontsize=size, lineheight=1.15, align=al)
             except Exception:
                 left = ["x"]
             if not left:
