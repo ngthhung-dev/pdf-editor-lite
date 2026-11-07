@@ -211,6 +211,7 @@ ICONS.update({
                          _poly(p, [(13, 21), (14, 17.5), (19.5, 12), (22, 14.5), (16.5, 20)], True)),
     "info": lambda p: (p.drawEllipse(QPointF(12, 12), 8.5, 8.5), p.drawLine(QPointF(12, 11), QPointF(12, 17)),
                        p.drawPoint(QPointF(12, 7.5))),
+    "update": lambda p: (_poly(p, [(4, 15), (4, 20), (20, 20), (20, 15)]), _arrow(p, 12, 3, 12, 16, 3.6, "#1a73e8")),
     "close": lambda p: (p.drawRoundedRect(QRectF(4, 4, 16, 16), 2, 2), _cross(p, 12, 12, 3.6, "#3c4654")),
     "exit": lambda p: (_poly(p, [(13, 4), (5, 4), (5, 20), (13, 20)]), _arrow(p, 10, 12, 20, 12, 3.5)),
     "copy": lambda p: (p.drawRoundedRect(QRectF(8, 8, 12, 13), 1.5, 1.5), _poly(p, [(16, 5), (16, 3.5), (4, 3.5), (4, 17), (5.5, 17)])),
@@ -312,7 +313,7 @@ MENU_ICONS = {
     "Ảnh / Word / Excel / PowerPoint → PDF…": "topdf", "Nhận dạng chữ (OCR) cho bản scan…": "ocr",
     "Nén giảm dung lượng…": "compress",
     "Ký số không hiện khung chữ ký…": "signhidden", "Gỡ mật khẩu": "unlock",
-    "Mở thư mục chứng thư gốc tin cậy": "certfolder", "Giới thiệu": "info", "Danh sách phím tắt": "keys", "Hướng dẫn sử dụng": "guide",
+    "Mở thư mục chứng thư gốc tin cậy": "certfolder", "Giới thiệu": "info", "Kiểm tra cập nhật…": "update", "Danh sách phím tắt": "keys", "Hướng dẫn sử dụng": "guide",
     # menu chuột phải trong trang và trong bảng bookmark
     "Sao chép": "copy", "Tô sáng": "highlight", "Gạch chân": "underline", "Gạch ngang": "strike",
     "Sao chép hình ảnh": "copy", "Lưu hình ảnh thành file…": "saveimg", "Xoá hình ảnh khỏi trang": "delimg",
