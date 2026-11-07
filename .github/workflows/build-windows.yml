@@ -160,7 +160,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, tag: arm64 }
+          - { os: macos-15, tag: arm64 }        # GitHub da ngung may macos-14
           - { os: macos-15-intel, tag: intel }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
