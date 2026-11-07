@@ -1422,7 +1422,8 @@ class MainWindow(QMainWindow):
         self.page_box.setKeyboardTracking(False)
         self.page_box.valueChanged.connect(self._goto_typed)
         self.page_lb = QLabel(" / 0 ")
-        tb.addWidget(QLabel(" Trang "))
+        page_label = QLabel(" Trang ")
+        tb.addWidget(page_label)
         tb.addWidget(self.page_box)
         tb.addWidget(self.page_lb)
         tb.addSeparator()
@@ -1447,13 +1448,15 @@ class MainWindow(QMainWindow):
                  "note", None, "rect", "ellipse", "line", "arrow", "ink", None]
         for k in order:
             t2.addSeparator() if k is None else t2.addAction(self.tool_actions[k])
-        t2.addWidget(QLabel(" Màu "))
+        color_label = QLabel(" Màu ")
+        t2.addWidget(color_label)
         self.color_btn = QToolButton()
         self.color_btn.setFixedSize(30, 22)
         self.color_btn.setToolTip("Màu của công cụ đang chọn")
         self.color_btn.clicked.connect(self.pick_color)
         t2.addWidget(self.color_btn)
-        t2.addWidget(QLabel("  Nét "))
+        width_label = QLabel("  Nét ")
+        t2.addWidget(width_label)
         self.width_box = QDoubleSpinBox()
         self.width_box.setRange(0.5, 12)
         self.width_box.setSingleStep(0.5)
@@ -1461,6 +1464,9 @@ class MainWindow(QMainWindow):
         self.width_box.setFixedWidth(64)
         self.width_box.valueChanged.connect(lambda v: self.tab() and setattr(self.tab().viewer, "line_width", v))
         t2.addWidget(self.width_box)
+        # ô chỉ dùng được khi có tài liệu đang mở: chưa mở file thì khoá mờ như các nút khác
+        self.doc_widgets = [self.zoom_box, page_label, self.page_box, self.page_lb, color_label, self.color_btn,
+                            width_label, self.width_box]
         t2.addSeparator()
         for a in (self.a_hand, self.a_sign, self.a_verify, self.a_lock):
             b = QToolButton()
@@ -1482,10 +1488,19 @@ class MainWindow(QMainWindow):
         self._side_label()
         for a in self.doc_actions:
             a.setEnabled(t is not None)
+        for w in getattr(self, "doc_widgets", ()):
+            w.setEnabled(t is not None)
         if not t:
             self.setWindowTitle(APP_NAME)
             self.page_lb.setText(" / 0 ")
+            self.zoom_box.setEditText("")        # chưa có tài liệu: ô trống, không hiện số giả
+            self.page_box.blockSignals(True)
+            self.page_box.setSpecialValueText(" ")
+            self.page_box.setRange(0, 0)
+            self.page_box.blockSignals(False)
+            self.color_btn.setStyleSheet("QToolButton{background:transparent;border:1px solid #c4c7c5;border-radius:3px;}")
             return
+        self.page_box.setSpecialValueText("")
         m = t.model
         self.a_undo.setEnabled(bool(m.undo_stack))
         self.a_redo.setEnabled(bool(m.redo_stack))
