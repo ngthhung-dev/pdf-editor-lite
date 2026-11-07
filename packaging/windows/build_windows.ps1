@@ -58,7 +58,17 @@ $vpy = "$venv\Scripts\python.exe"
 & $vpy -m pip install -r (Join-Path $root "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Cai thu vien chinh that bai." }
 Note "thu vien chinh: OK"
+# PyInstaller: dung bo nap (bootloader) tu bien dich tu ma nguon thay cho bo nap dung san trong goi cai.
+# Bo nap dung san duoc rat nhieu phan mem khac dung chung (ke ca ma doc) nen Windows Defender hay bao nham file .exe
+# cua app (vd. Trojan:Win32/Bearfoos.B!ml). Bien dich that bai (thieu trinh bien dich C) thi dung goi thuong de van ra bo cai.
+$env:PYINSTALLER_COMPILE_BOOTLOADER = "1"
+& $vpy -m pip install --no-binary pyinstaller --no-cache-dir pyinstaller
+$boot = $LASTEXITCODE -eq 0
+Remove-Item Env:\PYINSTALLER_COMPILE_BOOTLOADER -ErrorAction SilentlyContinue
+if ($boot) { Note "PyInstaller: bo nap tu bien dich tu ma nguon: OK" }
+else { Note "PyInstaller: KHONG bien dich duoc bo nap, dung bo nap dung san (de bi Defender bao nham hon)." }
 foreach ($pkg in @("pdf2docx", "python-pkcs11", "rapidocr", "onnxruntime", "pyinstaller")) {
+    if ($pkg -eq "pyinstaller" -and $boot) { continue }
     & $vpy -m pip install $pkg
     if ($LASTEXITCODE -ne 0) {
         if ($pkg -eq "pyinstaller") { throw "Khong cai duoc PyInstaller." }

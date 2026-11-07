@@ -176,6 +176,29 @@ def pick_font_file(pdf_font: str = "", flags: int = 0, text: str = "", bold=None
 FROZEN = bool(getattr(sys, "frozen", False))      # đang chạy từ file .exe đã đóng gói (bản cài đặt)
 
 
+def exe_removed_message(e: BaseException | None = None) -> str | None:
+    """Bản cài đặt mà file chạy chính (PDFEditorLite.exe) đã bị phần mềm diệt virus xoá / cách ly trong lúc app đang mở:
+    app còn chạy nhưng không nạp thêm được phần mã nằm trong file đó, nên mọi lỗi kiểu OSError trỏ vào file chạy đều do
+    nguyên nhân này. Trả về câu báo dễ hiểu, hoặc None nếu không phải trường hợp này."""
+    if not FROZEN:
+        return None
+    exe = sys.executable
+    if os.path.exists(exe):
+        if not (isinstance(e, OSError) and getattr(e, "filename", None)
+                and os.path.normcase(str(e.filename)) == os.path.normcase(exe)):
+            return None
+    return ("File chạy của PDF Editor Lite vừa bị phần mềm diệt virus (thường là Windows Defender) xoá hoặc cách ly "
+            "trong lúc app đang mở, nên chức năng này không chạy được.\n\n"
+            f"File: {exe}\n\n"
+            "Cách xử lý:\n"
+            "1. Mở Windows Security → Virus & threat protection → Protection history, chọn mục báo PDFEditorLite.exe → "
+            "Actions → Restore (hoặc Allow).\n"
+            "2. Hoặc cài lại PDF Editor Lite từ bộ cài.\n"
+            "3. Đóng hẳn PDF Editor Lite rồi mở lại.\n\n"
+            "Đây thường là báo nhầm với app chưa có chữ ký nhà phát triển; có thể gửi báo cáo nhầm cho Microsoft tại "
+            "https://www.microsoft.com/wdsi/filesubmission.")
+
+
 def app_dir() -> str:
     """Thư mục gốc của ứng dụng: nơi đặt file chạy (bản cài đặt) hoặc thư mục mã nguồn (bản portable)."""
     if FROZEN:

@@ -257,10 +257,22 @@ def _fit(box: pymupdf.Rect, size: tuple[int, int] | None) -> pymupdf.Rect:
 
 
 def appearance_boxes(width: float, height: float, has_lines: bool, image_path: str | None, image_pos: str = "auto",
-                     image_rect=None) -> tuple[pymupdf.Rect | None, pymupdf.Rect]:
+                     image_rect=None, text_rect=None) -> tuple[pymupdf.Rect | None, pymupdf.Rect]:
     """(khung ảnh thật sự được vẽ — đúng tỉ lệ ảnh, khung chữ) trong khung chữ ký width × height.
     image_pos 'custom': ảnh ở `image_rect` (tỉ lệ 0..1 theo khung chữ ký, người dùng kéo trong khung xem trước),
-    'behind': ảnh phủ giữa cả khung; hai kiểu này chữ chiếm cả khung và nằm đè lên ảnh."""
+    'behind': ảnh phủ giữa cả khung; hai kiểu này chữ chiếm cả khung và nằm đè lên ảnh.
+    text_rect (tỉ lệ 0..1): vùng chữ người dùng tự kéo; None thì vùng chữ tính theo vị trí ảnh."""
+    img, txt = _appearance_boxes(width, height, has_lines, image_path, image_pos, image_rect)
+    if text_rect and len(text_rect) == 4:
+        x0, y0, x1, y1 = (float(v) for v in text_rect)
+        box = pymupdf.Rect(x0 * width, y0 * height, x1 * width, y1 * height)
+        if box.width >= 6 and box.height >= 4:
+            txt = box
+    return img, txt
+
+
+def _appearance_boxes(width: float, height: float, has_lines: bool, image_path: str | None, image_pos: str = "auto",
+                      image_rect=None) -> tuple[pymupdf.Rect | None, pymupdf.Rect]:
     pad = 3
     r = pymupdf.Rect(0, 0, width, height)
     text_rect = r + (pad, pad, -pad, -pad)
@@ -291,7 +303,8 @@ def appearance_boxes(width: float, height: float, has_lines: bool, image_path: s
 
 def make_appearance(width: float, height: float, lines: list[str], image_path: str | None = None,
                     border: bool = True, color=(0.75, 0.05, 0.05), image_pos: str = "auto", align: str = "left",
-                    font_size: float | None = None, bold_first: bool = False, image_rect=None) -> bytes:
+                    font_size: float | None = None, bold_first: bool = False, image_rect=None,
+                    text_rect=None) -> bytes:
     """Dựng hình khung chữ ký (PDF 1 trang) gồm ảnh chữ ký và các dòng thông tin.
     image_pos: 'auto' | 'left' | 'right' | 'top' | 'bottom' | 'behind' (ảnh nằm dưới chữ) | 'custom' (ảnh ở
     image_rect = (x0, y0, x1, y1) tỉ lệ 0..1 theo khung); align: 'left' | 'center' | 'right';
@@ -301,7 +314,7 @@ def make_appearance(width: float, height: float, lines: list[str], image_path: s
     r = page.rect
     if border:
         page.draw_rect(r + (0.6, 0.6, -0.6, -0.6), color=color, width=1.0)
-    img_rect, text_rect = appearance_boxes(width, height, bool(lines), image_path, image_pos, image_rect)
+    img_rect, text_rect = appearance_boxes(width, height, bool(lines), image_path, image_pos, image_rect, text_rect)
     if img_rect is not None:                     # vẽ ảnh trước: chữ (nếu chồng lên) nằm đè trên ảnh
         try:
             page.insert_image(img_rect, filename=image_path, keep_proportion=False)
@@ -399,6 +412,9 @@ def sign_pdf(data: bytes, signer, *, page_index: int | None = None, box=None, ap
     except SignError:
         raise
     except Exception as e:
+        removed = tools.exe_removed_message(e)
+        if removed:
+            raise SignError("Ký số thất bại.\n\n" + removed)
         msg = f"{type(e).__name__}: {e}"
         if tsa_url and ("imestamp" in msg or "Connection" in msg or "HTTP" in msg):
             msg = "Không kết nối được máy chủ dấu thời gian (TSA). Bỏ trống ô TSA để ký không dấu thời gian.\n" + msg
