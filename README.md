@@ -52,6 +52,8 @@ Số sau chữ `build` là số bản: số càng lớn thì bản càng mới. 
 
 **Ký số và bảo mật**
 - Ký số bằng USB token (PKCS#11) hoặc file chứng thư (.pfx/.p12), có hoặc không hiện khung chữ ký; kiểm tra chữ ký số.
+- Tự dò USB token đang cắm và driver tương ứng; cắm nhiều token thì chọn nhanh đúng token trong danh sách.
+- Kiểm tra chữ ký dùng luôn chứng thư gốc có sẵn trong máy (kho chứng thư Windows / macOS), xác nhận được nguồn gốc chữ ký Viettel-CA, VNPT-CA, FPT-CA… mà không cần chép chứng thư bằng tay.
 - Khung chữ ký có xem trước và tự bố trí được:
   - chọn các dòng thông tin (người ký, đơn vị, mã số, thời gian, lý do, nơi ký, nhà cung cấp chứng thư, dòng tự nhập);
   - đổi thứ tự dòng, sửa nhãn từng dòng;

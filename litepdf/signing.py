@@ -103,10 +103,130 @@ def find_pkcs11_libs() -> list[str]:
     seen, out = set(), []
     for p in found:
         k = os.path.normcase(os.path.realpath(p))
-        if k not in seen and not os.path.basename(p).lower().startswith(("p11-kit", "libp11-kit", "msp", "wp")):
-            seen.add(k)
+        base = os.path.basename(p).lower()
+        if k in seen or base.startswith(("p11-kit", "libp11-kit", "msp", "wp", "msvc", "vcamp", "vcomp", "microsoft-",
+                                         "api-ms-", "ucrt")):
+            continue
+        seen.add(k)
+        # tên có hãng chữ ký số (viettel, vnpt, safe…) thì giữ luôn (driver nén không đọc được tên hàm trong file)
+        if any(key in base for key, _ in _VENDORS) or "safe" in base or _is_pkcs11(p):
             out.append(p)
     return out
+
+
+def _is_pkcs11(path: str) -> bool:
+    """File thư viện có hàm C_GetFunctionList (mọi driver PKCS#11 đều phải có): loại các file trùng mẫu tên nhưng không
+    phải driver token (vd. msvcp110.dll khớp mẫu *p11*)."""
+    try:
+        if os.path.getsize(path) > 64 * 1024 * 1024:
+            return True
+        with open(path, "rb") as f:
+            return b"C_GetFunctionList" in f.read()
+    except OSError:
+        return False
+
+
+def probe_main(lib_path: str, out_path: str) -> int:
+    """Chạy trong tiến trình phụ (PDFEditorLite --probe-pkcs11 <driver> <file kết quả>): nạp thử một driver và ghi ra
+    các token đang cắm mà driver đó nhận được. Mỗi tiến trình chỉ nạp được một driver nên mỗi driver thử riêng."""
+    import json
+    res: dict = {"lib": lib_path, "tokens": [], "error": ""}
+    try:
+        import pkcs11
+        lib = pkcs11.lib(lib_path)
+        for slot in lib.get_slots(token_present=True):
+            try:
+                t = slot.get_token()
+                ser = t.serial
+                ser = ser.decode(errors="ignore") if isinstance(ser, bytes) else str(ser or "")
+                res["tokens"].append({"slot": int(slot.slot_id), "label": (t.label or "").strip(), "serial": ser.strip(),
+                                      "manufacturer": (getattr(t, "manufacturer_id", "") or "").strip(),
+                                      "model": (getattr(t, "model", "") or "").strip(),
+                                      "slot_desc": (getattr(slot, "slot_description", "") or "").strip()})
+            except Exception:
+                continue
+    except Exception as e:
+        res["error"] = f"{type(e).__name__}: {e}"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(res, f, ensure_ascii=False)
+    return 0
+
+
+def _probe_cmd() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    main = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main.py")
+    return [sys.executable, main]
+
+
+_VENDORS = [("viettel", "Viettel-CA"), ("vnpt", "VNPT-CA"), ("fpt", "FPT-CA"), ("bkav", "BKAV-CA"), ("nca", "NC-CA"),
+            ("newtel", "Newtel-CA"), ("cmc", "CMC-CA"), ("ca2", "CA2"), ("safe", "Safe-CA"), ("smartsign", "SmartSign"),
+            ("efy", "EFY-CA"), ("easyca", "EasyCA"), ("misa", "MISA-CA"), ("eps2003", "ePass2003"),
+            ("shuttle", "Shuttle"), ("etpkcs11", "SafeNet eToken"), ("opensc", "OpenSC"), ("softhsm", "SoftHSM")]
+
+
+def vendor_of(lib_path: str, token: dict | None = None) -> str:
+    """Tên nhà cung cấp dễ hiểu, đoán từ tên file driver (và thông tin token)."""
+    text = (os.path.basename(lib_path) + " " + " ".join(str(v) for v in (token or {}).values())).lower()
+    for key, name in _VENDORS:
+        if key in text:
+            return name
+    return os.path.splitext(os.path.basename(lib_path))[0]
+
+
+def probe_tokens(libs: list[str] | None = None, timeout: float = 20.0) -> list[dict]:
+    """Dò token đang cắm: thử từng driver đã cài (song song, mỗi driver một tiến trình phụ). Trả về danh sách
+    {lib, vendor, slot, label, serial, manufacturer, model}; một token được nhiều driver nhận thì chỉ giữ một dòng,
+    ưu tiên driver đúng hãng của token."""
+    import json
+    import subprocess
+    import threading
+    libs = find_pkcs11_libs() if libs is None else libs
+    found: list[dict] = []
+    lock = threading.Lock()
+    tmp = tempfile.mkdtemp(prefix="litepdf-p11-")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    def one(lib: str, k: int):
+        out = os.path.join(tmp, f"{k}.json")
+        try:
+            subprocess.run(_probe_cmd() + ["--probe-pkcs11", lib, out], timeout=timeout, capture_output=True,
+                           creationflags=flags)
+            data = json.load(open(out, encoding="utf-8"))
+        except Exception:
+            return
+        with lock:
+            for t in data.get("tokens", []):
+                found.append(dict(t, lib=lib, vendor=vendor_of(lib, t)))
+    threads = []
+    for k, lib in enumerate(libs):
+        th = threading.Thread(target=one, args=(lib, k), daemon=True)
+        th.start()
+        threads.append(th)
+        if len([t for t in threads if t.is_alive()]) >= 6:       # không chạy quá nhiều tiến trình cùng lúc
+            for t in threads:
+                t.join(timeout)
+    for th in threads:
+        th.join(timeout + 5)
+    try:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+    except Exception:
+        pass
+    return dedupe_tokens(found)
+
+
+def dedupe_tokens(found: list[dict]) -> list[dict]:
+    """Một token (cùng số serial) được nhiều driver nhận: giữ driver mà tên hãng khớp với thông tin token."""
+    best: dict = {}
+    for t in found:
+        key = (t["serial"] or t["label"] or t["lib"]).lower()
+        info = " ".join([t["label"], t["manufacturer"], t["model"], t.get("slot_desc", "")]).lower()
+        lib_l = os.path.basename(t["lib"]).lower()
+        score = 2 if any(k in lib_l and k in info for k, _ in _VENDORS) else (1 if t["label"] else 0)
+        if key not in best or score > best[key][0]:
+            best[key] = (score, t)
+    return sorted((v[1] for v in best.values()), key=lambda t: (t["vendor"], t["label"]))
 
 
 _LIB_CACHE: dict[str, object] = {}
@@ -428,23 +548,76 @@ def sign_pdf(data: bytes, signer, *, page_index: int | None = None, box=None, ap
 
 
 # ------------------------------------------------------------ kiểm tra chữ ký
+def _load_certs(raw: bytes) -> list:
+    from asn1crypto import pem, x509
+    out = []
+    try:
+        if pem.detect(raw):
+            for _t, _h, der in pem.unarmor(raw, multiple=True):
+                out.append(x509.Certificate.load(der))
+        else:
+            out.append(x509.Certificate.load(raw))
+    except Exception:
+        pass
+    return out
+
+
 def _load_trust(trust_dir: str | None) -> list:
     roots = []
     if trust_dir and os.path.isdir(trust_dir):
-        from asn1crypto import pem, x509
         for f in os.listdir(trust_dir):
             if not f.lower().endswith((".cer", ".crt", ".pem", ".der")):
                 continue
             try:
-                raw = open(os.path.join(trust_dir, f), "rb").read()
-                if pem.detect(raw):
-                    for _t, _h, der in pem.unarmor(raw, multiple=True):
-                        roots.append(x509.Certificate.load(der))
-                else:
-                    roots.append(x509.Certificate.load(raw))
+                roots += _load_certs(open(os.path.join(trust_dir, f), "rb").read())
             except Exception:
                 continue
     return roots
+
+
+_SYSTEM_CERTS: dict = {}
+
+
+def system_certs() -> tuple[list, list]:
+    """(chứng thư gốc tin cậy, chứng thư trung gian) có sẵn trong máy.
+    Windows: kho "Trusted Root" và "Intermediate CA" của Windows — cài driver USB token (Viettel-CA, VNPT-CA, FPT-CA…)
+    thường đã cài sẵn chứng thư gốc quốc gia (MIC National Root CA) và chứng thư nhà cung cấp vào đây.
+    macOS: chuỗi khoá hệ thống; Linux: kho chứng thư của hệ điều hành."""
+    if "v" in _SYSTEM_CERTS:
+        return _SYSTEM_CERTS["v"]
+    roots, inter = [], []
+    try:
+        if sys.platform.startswith("win"):
+            import ssl
+            from asn1crypto import x509
+            for store, dest in (("ROOT", roots), ("CA", inter)):
+                try:
+                    items = ssl.enum_certificates(store)
+                except Exception:
+                    continue
+                for der, enc, _trust in items:
+                    if enc == "x509_asn":
+                        try:
+                            dest.append(x509.Certificate.load(der))
+                        except Exception:
+                            pass
+        elif sys.platform == "darwin":
+            import subprocess
+            for kc, dest in (("/System/Library/Keychains/SystemRootCertificates.keychain", roots),
+                             ("/Library/Keychains/System.keychain", roots),
+                             (os.path.expanduser("~/Library/Keychains/login.keychain-db"), inter)):
+                if os.path.exists(kc):
+                    r = subprocess.run(["security", "find-certificate", "-a", "-p", kc], capture_output=True, timeout=20)
+                    dest += _load_certs(r.stdout)
+        else:
+            for f in ("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem"):
+                if os.path.exists(f):
+                    roots += _load_certs(open(f, "rb").read())
+                    break
+    except Exception:
+        pass
+    _SYSTEM_CERTS["v"] = (roots, inter)
+    return roots, inter
 
 
 def count_signatures(data: bytes) -> int:
@@ -466,7 +639,10 @@ def verify_signatures(data: bytes, trust_dir: str | None = None) -> list[dict]:
         sigs = list(reader.embedded_signatures)
     except Exception as e:
         raise SignError(f"Không đọc được chữ ký trong file: {e}")
-    roots = _load_trust(trust_dir)
+    # gốc tin cậy = chứng thư người dùng tự thêm + chứng thư gốc có sẵn trong máy; chứng thư trung gian (Viettel-CA,
+    # VNPT-CA…) của máy giúp nối chữ ký tới gốc khi file ký không kèm đủ chuỗi chứng thư
+    sys_roots, sys_inter = system_certs()
+    roots = _load_trust(trust_dir) + sys_roots
     results = []
     for sig in sigs:
         res = {"field": sig.field_name, "ok": False, "intact": False, "valid": False, "trusted": False,
@@ -482,7 +658,7 @@ def verify_signatures(data: bytes, trust_dir: str | None = None) -> list[dict]:
         except Exception:
             pass
         try:
-            vc = ValidationContext(extra_trust_roots=roots or None, allow_fetching=False)
+            vc = ValidationContext(extra_trust_roots=roots or None, other_certs=sys_inter or None, allow_fetching=False)
             st = validate_pdf_signature(sig, vc, skip_diff=False)
             res["intact"] = bool(st.intact)
             res["valid"] = bool(st.valid)
