@@ -3015,17 +3015,18 @@ class MainWindow(QMainWindow):
         data = m.export_bytes()
         empty = signing.empty_signature_fields(data)
         self.done()
-        dlg = SignDialog(self, self.cfg, rect is not None, empty)
+        dlg = SignDialog(self, self.cfg, rect is not None, empty,
+                         box_size=(rect.width, rect.height) if rect is not None else None)
         try:
             if not dlg.exec():
                 return
             existing = dlg.field.currentData() or None
             box = appearance = None
             if existing:
-                appearance = signing.make_appearance(220, 80, dlg.lines(), dlg.img.currentData() or None)
+                appearance = dlg.appearance(220, 80)
             elif rect is not None:
                 box = signing.pdf_box(m.doc[page], rect)
-                appearance = signing.make_appearance(rect.width, rect.height, dlg.lines(), dlg.img.currentData() or None)
+                appearance = dlg.appearance(rect.width, rect.height)
             out = self._out_path(t, "_da_ky", ".pdf", "PDF (*.pdf)")
             if not out:
                 return

@@ -52,6 +52,10 @@ Số sau chữ `build` là số bản: số càng lớn thì bản càng mới. 
 
 **Ký số và bảo mật**
 - Ký số bằng USB token (PKCS#11) hoặc file chứng thư (.pfx/.p12), có hoặc không hiện khung chữ ký; kiểm tra chữ ký số.
+- Khung chữ ký có xem trước và tự bố trí được:
+  - chọn các dòng thông tin (người ký, đơn vị, mã số, thời gian, lý do, nơi ký, nhà cung cấp chứng thư, dòng tự nhập);
+  - đổi thứ tự dòng, sửa nhãn từng dòng;
+  - vị trí ảnh chữ ký, căn chữ, cỡ chữ, màu, viền, dòng đầu in đậm.
 - Chèn ảnh chữ ký tay / con dấu (thư viện chữ ký dùng lại được).
 - Đặt và gỡ mật khẩu file.
 
