@@ -1040,7 +1040,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 while QApplication.overrideCursor():
                     QApplication.restoreOverrideCursor()
-                self.error(f"Có lỗi xảy ra:\n{type(e).__name__}: {e}")
+                self.error(tools.exe_removed_message(e) or f"Có lỗi xảy ra:\n{type(e).__name__}: {e}")
         return run
 
     def busy(self):

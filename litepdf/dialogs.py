@@ -1017,6 +1017,8 @@ class SignDialog(QDialog):
         self.img_pos.setToolTip("Kéo ảnh trong khung xem trước để dời, kéo góc dưới phải để đổi cỡ: tự chuyển sang Tùy chỉnh.")
         r = cfg.get("sign_img_rect")
         self.img_rect = [float(v) for v in r] if isinstance(r, list) and len(r) == 4 else None
+        r = cfg.get("sign_text_rect")             # vùng chữ người dùng tự kéo trong khung xem trước (tỉ lệ theo khung)
+        self.text_rect = [float(v) for v in r] if isinstance(r, list) and len(r) == 4 else None
         row.addWidget(QLabel("Ảnh:"))
         row.addWidget(self.img_pos)
         self.align = QComboBox()
@@ -1080,6 +1082,10 @@ class SignDialog(QDialog):
         self._pv = None                          # (tỉ lệ phóng, gốc toạ độ của khung trong ô xem trước)
         self._img_drag = None
         right.addWidget(self.preview, 1)
+        b_reset = QPushButton("Đặt lại bố trí")
+        b_reset.setToolTip("Bỏ vị trí ảnh và vùng chữ đã kéo, về bố trí tự động")
+        b_reset.clicked.connect(self._reset_layout)
+        right.addWidget(b_reset, 0, Qt.AlignRight)
         self.preview_note = QLabel("")
         self.preview_note.setWordWrap(True)
         self.preview_note.setStyleSheet("color:#5f6368;font-size:11px")
@@ -1195,13 +1201,27 @@ class SignDialog(QDialog):
                                        border=self.c_border.isChecked(), color=(c.redF(), c.greenF(), c.blueF()),
                                        image_pos=self.img_pos.currentData(), align=self.align.currentData(),
                                        font_size=self.font_size.value() or None, bold_first=self.c_bold.isChecked(),
-                                       image_rect=self.img_rect)
+                                       image_rect=self.img_rect, text_rect=self.text_rect)
 
-    def _image_box(self) -> "pymupdf.Rect | None":
-        """Khung ảnh đang vẽ trong khung chữ ký (điểm, theo khung chữ ký)."""
+    def _boxes(self):
+        """(khung ảnh hoặc None, vùng chữ) đang vẽ trong khung chữ ký (điểm, theo khung chữ ký)."""
         w, h = self.box_size
         return signing.appearance_boxes(w, h, bool(self.lines(True)), self.img.currentData() or None,
-                                        self.img_pos.currentData(), self.img_rect)[0]
+                                        self.img_pos.currentData(), self.img_rect, self.text_rect)
+
+    def _image_box(self) -> "pymupdf.Rect | None":
+        return self._boxes()[0]
+
+    def _text_box(self) -> "pymupdf.Rect | None":
+        return self._boxes()[1] if self.lines(True) else None
+
+    def _reset_layout(self) -> None:
+        """Bỏ vị trí ảnh / vùng chữ đã kéo, về bố trí tự động."""
+        self.img_rect = self.text_rect = None
+        self.img_pos.blockSignals(True)
+        self.img_pos.setCurrentIndex(max(0, self.img_pos.findData("auto")))
+        self.img_pos.blockSignals(False)
+        self._refresh_preview()
 
     def _refresh_preview(self) -> None:
         if not hasattr(self, "preview"):
@@ -1214,17 +1234,28 @@ class SignDialog(QDialog):
             pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(z * 2, z * 2), alpha=False)
             doc.close()
             img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
-            ib = self._image_box()
-            if ib is not None:                   # khung ảnh (nét đứt) + ô vuông ở góc: kéo để dời / đổi cỡ
-                p = QPainter(img)
-                p.setRenderHint(QPainter.Antialiasing)
+            ib, tb = self._image_box(), self._text_box()
+            p = QPainter(img)
+            p.setRenderHint(QPainter.Antialiasing)
+            s = z * 2
+            # vùng chữ (nét đứt xanh lá) + ô vuông ở 4 góc, 4 cạnh: kéo để dời / kéo dãn
+            if tb is not None:
+                p.setPen(QPen(QColor("#188038"), 2, Qt.DashLine))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(int(tb.x0 * s), int(tb.y0 * s), int(tb.width * s), int(tb.height * s))
+                p.setPen(QPen(QColor("#188038"), 2))
+                p.setBrush(QColor("white"))
+                for hx, hy in self._text_handles(tb).values():
+                    p.drawRect(int(hx * s) - 6, int(hy * s) - 6, 12, 12)
+            # khung ảnh (nét đứt xanh dương) + ô vuông ở góc dưới phải: kéo để dời / đổi cỡ
+            if ib is not None:
                 p.setPen(QPen(QColor("#1a73e8"), 2, Qt.DashLine))
                 p.setBrush(Qt.NoBrush)
-                p.drawRect(int(ib.x0 * z * 2), int(ib.y0 * z * 2), int(ib.width * z * 2), int(ib.height * z * 2))
+                p.drawRect(int(ib.x0 * s), int(ib.y0 * s), int(ib.width * s), int(ib.height * s))
                 p.setPen(QPen(QColor("#1a73e8"), 2))
                 p.setBrush(QColor("white"))
-                p.drawRect(int(ib.x1 * z * 2) - 7, int(ib.y1 * z * 2) - 7, 14, 14)
-                p.end()
+                p.drawRect(int(ib.x1 * s) - 7, int(ib.y1 * s) - 7, 14, 14)
+            p.end()
             pm = QPixmap.fromImage(img)
             pm.setDevicePixelRatio(2)
             self.preview.setPixmap(pm)
@@ -1235,8 +1266,9 @@ class SignDialog(QDialog):
             self._pv = None
             self.preview.setText(f"Không xem trước được: {e}")
         note = f"Khung {w * 25.4 / 72:.0f} × {h * 25.4 / 72:.0f} mm (đúng tỉ lệ vùng đã khoanh trên trang)."
+        note += " Kéo vùng chữ (khung xanh lá) để dời, kéo ô vuông ở góc / cạnh để kéo dãn."
         if self.img.currentData():
-            note += " Kéo ảnh để dời, kéo ô vuông ở góc để đổi cỡ."
+            note += " Kéo ảnh (khung xanh dương) để dời, kéo ô vuông ở góc để đổi cỡ."
         if not self.info:
             note += " Chữ trong ngoặc là chữ mẫu: tên, đơn vị thật lấy từ chứng thư khi đọc chứng thư / khi ký."
         self.preview_note.setText(note)
@@ -1247,25 +1279,74 @@ class SignDialog(QDialog):
             z, ox, oy = self._pv
             pos = e.position()
             pt = pymupdf.Point((pos.x() - ox) / z, (pos.y() - oy) / z)        # toạ độ trong khung chữ ký (điểm)
-            ib = self._image_box()
-            near = 8 / z
-            corner = ib is not None and abs(pt.x - ib.x1) <= near and abs(pt.y - ib.y1) <= near
-            inside = ib is not None and pt in ib
-            if e.type() == QEvent.MouseButtonPress and e.button() == Qt.LeftButton and (corner or inside):
-                self._img_drag = ("scale" if corner else "move", pt, pymupdf.Rect(ib))
+            if e.type() == QEvent.MouseMove and self._img_drag:
+                (self._drag_text if self._img_drag[0] == "text" else self._drag_image)(pt)
                 return True
-            if e.type() == QEvent.MouseMove:
-                if self._img_drag:
-                    self._drag_image(pt)
-                    return True
-                self.preview.setCursor(Qt.SizeFDiagCursor if corner else Qt.SizeAllCursor if inside else Qt.ArrowCursor)
             if e.type() == QEvent.MouseButtonRelease and self._img_drag:
                 self._img_drag = None
                 return True
+            hit = self._hit(pt, 8 / z)
+            if e.type() == QEvent.MouseButtonPress and e.button() == Qt.LeftButton and hit:
+                what, part, box = hit
+                self._img_drag = (what, pt, pymupdf.Rect(box), part)
+                return True
+            if e.type() == QEvent.MouseMove:
+                part = hit[1] if hit else None
+                cur = {"move": Qt.SizeAllCursor, "br": Qt.SizeFDiagCursor, "tl": Qt.SizeFDiagCursor,
+                       "tr": Qt.SizeBDiagCursor, "bl": Qt.SizeBDiagCursor, "l": Qt.SizeHorCursor, "r": Qt.SizeHorCursor,
+                       "t": Qt.SizeVerCursor, "b": Qt.SizeVerCursor}.get(part, Qt.ArrowCursor)
+                self.preview.setCursor(cur)
         return super().eventFilter(obj, e)
 
+    @staticmethod
+    def _text_handles(tb) -> dict:
+        cx, cy = (tb.x0 + tb.x1) / 2, (tb.y0 + tb.y1) / 2
+        return {"tl": (tb.x0, tb.y0), "tr": (tb.x1, tb.y0), "bl": (tb.x0, tb.y1), "br": (tb.x1, tb.y1),
+                "t": (cx, tb.y0), "b": (cx, tb.y1), "l": (tb.x0, cy), "r": (tb.x1, cy)}
+
+    def _hit(self, pt, near: float):
+        """Chỗ con trỏ đang trỏ: ('img' | 'text', 'move' | góc / cạnh, khung) hoặc None.
+        Ô vuông đổi cỡ được ưu tiên; ảnh và vùng chữ chồng nhau thì lấy cái nhỏ hơn (thường là ảnh)."""
+        ib, tb = self._image_box(), self._text_box()
+        if ib is not None and abs(pt.x - ib.x1) <= near and abs(pt.y - ib.y1) <= near:
+            return ("img", "br", ib)
+        if tb is not None:
+            for k, (hx, hy) in self._text_handles(tb).items():
+                if abs(pt.x - hx) <= near and abs(pt.y - hy) <= near:
+                    return ("text", k, tb)
+        cands = [(b.get_area(), what, b) for what, b in (("img", ib), ("text", tb)) if b is not None and pt in b]
+        if cands:
+            _a, what, b = min(cands, key=lambda c: c[0])
+            return (what, "move", b)
+        return None
+
+    def _drag_text(self, pt) -> None:
+        """Kéo vùng chữ: dời cả vùng, hoặc kéo dãn theo góc / cạnh đang nắm (không ra ngoài khung chữ ký)."""
+        _what, start, r0, part = self._img_drag
+        w, h = self.box_size
+        d = pt - start
+        r = pymupdf.Rect(r0)
+        if part == "move":
+            r += (d.x, d.y, d.x, d.y)
+            dx = -r.x0 if r.x0 < 0 else (w - r.x1 if r.x1 > w else 0)
+            dy = -r.y0 if r.y0 < 0 else (h - r.y1 if r.y1 > h else 0)
+            r += (dx, dy, dx, dy)
+        else:
+            mw, mh = 12.0, 8.0                   # vùng chữ nhỏ nhất
+            if "l" in part:
+                r.x0 = min(max(0.0, r0.x0 + d.x), r0.x1 - mw)
+            if "r" in part:
+                r.x1 = max(min(w, r0.x1 + d.x), r0.x0 + mw)
+            if "t" in part:
+                r.y0 = min(max(0.0, r0.y0 + d.y), r0.y1 - mh)
+            if "b" in part:
+                r.y1 = max(min(h, r0.y1 + d.y), r0.y0 + mh)
+        self.text_rect = [r.x0 / w, r.y0 / h, r.x1 / w, r.y1 / h]
+        self._refresh_preview()
+
     def _drag_image(self, pt) -> None:
-        mode, start, r0 = self._img_drag
+        mode, start, r0, part = self._img_drag
+        mode = "scale" if part != "move" else "move"
         w, h = self.box_size
         d = pt - start
         if mode == "move":
@@ -1404,7 +1485,7 @@ class SignDialog(QDialog):
         c["sign_reason"], c["sign_location"], c["tsa_url"] = self.reason.text(), self.location.text(), self.tsa.text().strip()
         c["sign_layout"] = self.sign_layout()
         c["sign_img_pos"], c["sign_align"] = self.img_pos.currentData(), self.align.currentData()
-        c["sign_img_rect"] = self.img_rect
+        c["sign_img_rect"], c["sign_text_rect"] = self.img_rect, self.text_rect
         c["sign_font_size"] = self.font_size.value()
         c["sign_color"] = self.sig_color.name()
         c["sign_border"], c["sign_bold_first"] = self.c_border.isChecked(), self.c_bold.isChecked()
