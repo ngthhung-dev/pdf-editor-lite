@@ -238,39 +238,73 @@ def sign_lines(layout: list[dict], values: dict) -> list[str]:
     return out
 
 
+def _image_size(path: str) -> tuple[int, int] | None:
+    try:
+        pix = pymupdf.Pixmap(path)
+        return pix.width, pix.height
+    except Exception:
+        return None
+
+
+def _fit(box: pymupdf.Rect, size: tuple[int, int] | None) -> pymupdf.Rect:
+    """Khung ảnh giữ đúng tỉ lệ ảnh, nằm giữa `box`."""
+    if not size or not size[0] or not size[1] or box.is_empty:
+        return pymupdf.Rect(box)
+    k = min(box.width / size[0], box.height / size[1])
+    w, h = size[0] * k, size[1] * k
+    c = (box.tl + box.br) / 2
+    return pymupdf.Rect(c.x - w / 2, c.y - h / 2, c.x + w / 2, c.y + h / 2)
+
+
+def appearance_boxes(width: float, height: float, has_lines: bool, image_path: str | None, image_pos: str = "auto",
+                     image_rect=None) -> tuple[pymupdf.Rect | None, pymupdf.Rect]:
+    """(khung ảnh thật sự được vẽ — đúng tỉ lệ ảnh, khung chữ) trong khung chữ ký width × height.
+    image_pos 'custom': ảnh ở `image_rect` (tỉ lệ 0..1 theo khung chữ ký, người dùng kéo trong khung xem trước),
+    'behind': ảnh phủ giữa cả khung; hai kiểu này chữ chiếm cả khung và nằm đè lên ảnh."""
+    pad = 3
+    r = pymupdf.Rect(0, 0, width, height)
+    text_rect = r + (pad, pad, -pad, -pad)
+    if not image_path or not os.path.exists(image_path):
+        return None, text_rect
+    size = _image_size(image_path)
+    if image_pos == "custom" and image_rect and len(image_rect) == 4:
+        x0, y0, x1, y1 = (float(v) for v in image_rect)
+        box = pymupdf.Rect(x0 * width, y0 * height, x1 * width, y1 * height)
+        return _fit(box if not box.is_empty else text_rect, size), text_rect    # khung khác tỉ lệ: ảnh không bị méo
+    if image_pos == "behind" or not has_lines:
+        return _fit(text_rect, size), text_rect
+    pos = image_pos if image_pos in ("left", "right", "top", "bottom") else ("left" if width >= height * 1.6 else "top")
+    if pos == "left":
+        img = pymupdf.Rect(pad, pad, width * 0.4, height - pad)
+        text_rect = pymupdf.Rect(width * 0.4 + pad, pad, width - pad, height - pad)
+    elif pos == "right":
+        img = pymupdf.Rect(width * 0.6, pad, width - pad, height - pad)
+        text_rect = pymupdf.Rect(pad, pad, width * 0.6 - pad, height - pad)
+    elif pos == "top":
+        img = pymupdf.Rect(pad, pad, width - pad, height * 0.5)
+        text_rect = pymupdf.Rect(pad, height * 0.5, width - pad, height - pad)
+    else:
+        img = pymupdf.Rect(pad, height * 0.5, width - pad, height - pad)
+        text_rect = pymupdf.Rect(pad, pad, width - pad, height * 0.5)
+    return _fit(img, size), text_rect
+
+
 def make_appearance(width: float, height: float, lines: list[str], image_path: str | None = None,
                     border: bool = True, color=(0.75, 0.05, 0.05), image_pos: str = "auto", align: str = "left",
-                    font_size: float | None = None, bold_first: bool = False) -> bytes:
+                    font_size: float | None = None, bold_first: bool = False, image_rect=None) -> bytes:
     """Dựng hình khung chữ ký (PDF 1 trang) gồm ảnh chữ ký và các dòng thông tin.
-    image_pos: 'auto' | 'left' | 'right' | 'top' | 'bottom'; align: 'left' | 'center' | 'right';
+    image_pos: 'auto' | 'left' | 'right' | 'top' | 'bottom' | 'behind' (ảnh nằm dưới chữ) | 'custom' (ảnh ở
+    image_rect = (x0, y0, x1, y1) tỉ lệ 0..1 theo khung); align: 'left' | 'center' | 'right';
     font_size: None = tự chọn cỡ lớn nhất vừa khung, số = cỡ cố định (vẫn tự thu nhỏ nếu không vừa)."""
     doc = pymupdf.open()
     page = doc.new_page(width=width, height=height)
     r = page.rect
     if border:
         page.draw_rect(r + (0.6, 0.6, -0.6, -0.6), color=color, width=1.0)
-    pad = 3
-    text_rect = r + (pad, pad, -pad, -pad)
-    if image_path and os.path.exists(image_path):
-        if lines:
-            pos = image_pos if image_pos in ("left", "right", "top", "bottom") else \
-                ("left" if width >= height * 1.6 else "top")
-            if pos == "left":
-                img_rect = pymupdf.Rect(pad, pad, width * 0.4, height - pad)
-                text_rect = pymupdf.Rect(width * 0.4 + pad, pad, width - pad, height - pad)
-            elif pos == "right":
-                img_rect = pymupdf.Rect(width * 0.6, pad, width - pad, height - pad)
-                text_rect = pymupdf.Rect(pad, pad, width * 0.6 - pad, height - pad)
-            elif pos == "top":
-                img_rect = pymupdf.Rect(pad, pad, width - pad, height * 0.5)
-                text_rect = pymupdf.Rect(pad, height * 0.5, width - pad, height - pad)
-            else:
-                img_rect = pymupdf.Rect(pad, height * 0.5, width - pad, height - pad)
-                text_rect = pymupdf.Rect(pad, pad, width - pad, height * 0.5)
-        else:
-            img_rect = text_rect
+    img_rect, text_rect = appearance_boxes(width, height, bool(lines), image_path, image_pos, image_rect)
+    if img_rect is not None:                     # vẽ ảnh trước: chữ (nếu chồng lên) nằm đè trên ảnh
         try:
-            page.insert_image(img_rect, filename=image_path, keep_proportion=True)
+            page.insert_image(img_rect, filename=image_path, keep_proportion=False)
         except Exception:
             pass
     if lines:
