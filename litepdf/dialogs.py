@@ -912,6 +912,21 @@ class SignDialog(QDialog):
         b.clicked.connect(self._browse_lib)
         row.addWidget(self.lib, 1)
         row.addWidget(b)
+        # token đang cắm: app tự thử từng driver đã cài để biết driver nào nhận token, có nhiều token thì chọn nhanh ở đây
+        trow = QHBoxLayout()
+        self.tok_box = QComboBox()
+        self.tok_box.setSizePolicy(self.pfx_path.sizePolicy())
+        self.tok_box.setToolTip("Token đang cắm vào máy và driver tương ứng (app tự dò). Chọn token để ký: driver được điền sẵn.")
+        self.tok_box.currentIndexChanged.connect(self._pick_detected)
+        self.b_scan = QPushButton("Dò lại")
+        self.b_scan.setToolTip("Dò lại token đang cắm (sau khi cắm / rút token)")
+        self.b_scan.clicked.connect(lambda: self._scan_tokens(force=True))
+        trow.addWidget(self.tok_box, 1)
+        trow.addWidget(self.b_scan)
+        f2.addRow("Token đang cắm:", trow)
+        self._want_serial = ""
+        self._detected: list[dict] = []
+        self._scanning = False
         f2.addRow("Driver token:", row)
         row = QHBoxLayout()
         self.pin = QLineEdit()
@@ -1377,6 +1392,79 @@ class SignDialog(QDialog):
         self.cert_lb.setText("")
         if self.r_tok.isChecked():
             self._show_cert()
+            if not self._detected and not self._scanning:
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(50, self._scan_tokens)      # chọn ký bằng token: tự dò token đang cắm
+
+    # ---------------------------------------------------------- dò USB token đang cắm
+    def _scan_tokens(self, force: bool = False) -> None:
+        """Thử từng driver token đã cài (tiến trình phụ, không làm treo hộp thoại) để biết token nào đang cắm, driver nào."""
+        if self._scanning:
+            return
+        if self.session is not None and not force:
+            return
+        import threading
+        from PySide6.QtCore import QTimer
+        self._scanning = True
+        self.b_scan.setEnabled(False)
+        self.tok_box.blockSignals(True)
+        self.tok_box.clear()
+        self.tok_box.addItem("Đang dò token đang cắm…", None)
+        self.tok_box.blockSignals(False)
+        libs = [self.lib.itemText(i) for i in range(self.lib.count())]
+        cur = self.lib.currentText().strip()
+        if cur and cur not in libs and os.path.exists(cur):
+            libs.insert(0, cur)
+        box: dict = {}
+
+        def work():
+            try:
+                box["r"] = signing.probe_tokens(libs)
+            except Exception as e:
+                box["e"] = e
+        th = threading.Thread(target=work, daemon=True)
+        th.start()
+
+        def poll():
+            if th.is_alive():
+                QTimer.singleShot(150, poll)
+                return
+            self._scanning = False
+            self.b_scan.setEnabled(True)
+            self._show_detected(box.get("r") or [], box.get("e"))
+        QTimer.singleShot(150, poll)
+
+    def _show_detected(self, toks: list[dict], err=None) -> None:
+        self._detected = toks
+        self.tok_box.blockSignals(True)
+        self.tok_box.clear()
+        if not toks:
+            self.tok_box.addItem("Không thấy token nào đang cắm (cắm token rồi bấm Dò lại)" if not err
+                                 else f"Không dò được token: {err}", None)
+        for t in toks:
+            ser = t["serial"]
+            ser = ("…" + ser[-6:]) if len(ser) > 6 else ser
+            name = t["label"] or t["model"] or "Token"
+            self.tok_box.addItem(f"{t['vendor']} — {name}" + (f" (số {ser})" if ser else "")
+                                 + f"  ·  {os.path.basename(t['lib'])}", t)
+        self.tok_box.blockSignals(False)
+        if toks:
+            last = self.cfg.get("token_serial", "")
+            i = next((k for k, t in enumerate(toks) if last and t["serial"] == last), 0)
+            self.tok_box.setCurrentIndex(i)
+            self._pick_detected(i)
+            if len(toks) > 1:
+                self.cert_lb.setText(f"Đang cắm {len(toks)} token: chọn đúng token cần ký ở ô “Token đang cắm”, "
+                                     "nhập PIN của token đó rồi bấm “Đọc chứng thư”.")
+
+    def _pick_detected(self, i: int) -> None:
+        t = self.tok_box.itemData(i) if i >= 0 else None
+        if not t:
+            return
+        if self.lib.findText(t["lib"]) < 0:
+            self.lib.addItem(t["lib"])
+        self.lib.setCurrentText(t["lib"])
+        self._want_serial = t["serial"]
 
     def _browse_pfx(self):
         p, _ = QFileDialog.getOpenFileName(self, "Chọn file chứng thư", "", "Chứng thư (*.pfx *.p12);;Tất cả (*)")
@@ -1419,7 +1507,11 @@ class SignDialog(QDialog):
                 self.session.close()
             named = [t for t in toks if t["label"]] or toks
             tok = named[0]
-            if len(named) > 1:
+            chosen = [t for t in toks if self._want_serial and t["serial"].strip() == self._want_serial]
+            if chosen:                           # token đã chọn ở ô "Token đang cắm": dùng đúng token đó, không hỏi lại
+                tok = chosen[0]
+                self.cfg["token_serial"] = self._want_serial
+            elif len(named) > 1:
                 names = [f"{t['label']} (khe {t['slot']})" for t in named]
                 pick, ok = QInputDialog.getItem(self, "USB token", "Máy đang cắm nhiều token, chọn token để ký:",
                                                 names, 0, False)

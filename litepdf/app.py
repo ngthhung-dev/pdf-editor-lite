@@ -3084,9 +3084,10 @@ class MainWindow(QMainWindow):
                     ("Nguồn gốc", trust), ("Lỗi", r["error"])]
             body = "".join(f"<tr><td style='color:#5f6368'>{a}</td><td>{b}</td></tr>" for a, b in rows if b)
             parts.append(f"<h3>Chữ ký {k}: {head}</h3><table cellpadding='3'>{body}</table>")
-        parts.append("<hr><p style='color:#5f6368'>Ghi chú: PDF Editor Lite kiểm tra được tính toàn vẹn (file có bị sửa sau khi ký "
-                     "hay không). Để xác nhận cả nhà cung cấp chữ ký số, hãy chép chứng thư gốc (.cer) của nhà cung cấp "
-                     "và của Root CA Quốc gia vào thư mục chứng thư tin cậy (Ký &amp; Bảo mật → Mở thư mục chứng thư "
+        parts.append("<hr><p style='color:#5f6368'>Ghi chú: “Nguồn gốc” xác nhận chứng thư do nhà cung cấp tin cậy cấp, "
+                     "dựa trên chứng thư gốc có sẵn trong máy (kho chứng thư của Windows / macOS — thường đã có khi cài "
+                     "driver USB token) và chứng thư tự thêm vào app. Máy chưa có thì chép chứng thư gốc (.cer) của nhà cung "
+                     "cấp và của Root CA Quốc gia vào thư mục chứng thư tin cậy (Ký &amp; Bảo mật → Mở thư mục chứng thư "
                      "gốc tin cậy). Việc kiểm tra thu hồi chứng thư trực tuyến chưa được hỗ trợ.</p>")
         ReportDialog(self, "Kết quả kiểm tra chữ ký số", "".join(parts)).exec()
 

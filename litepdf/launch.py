@@ -89,6 +89,9 @@ def send_to_running(files: list[str]) -> bool:
 
 def main(argv: list[str]) -> int:
     mark("python")
+    if len(argv) > 3 and argv[1] == "--probe-pkcs11":        # tiến trình phụ: thử một driver token, ghi kết quả ra file
+        from .signing import probe_main
+        return probe_main(argv[2], argv[3])
     if len(argv) > 1 and argv[1] == "--selftest":
         from .app import selftest
         return selftest(argv[2] if len(argv) > 2 else None)
