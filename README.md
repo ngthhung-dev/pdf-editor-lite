@@ -55,7 +55,8 @@ Số sau chữ `build` là số bản: số càng lớn thì bản càng mới. 
 - Khung chữ ký có xem trước và tự bố trí được:
   - chọn các dòng thông tin (người ký, đơn vị, mã số, thời gian, lý do, nơi ký, nhà cung cấp chứng thư, dòng tự nhập);
   - đổi thứ tự dòng, sửa nhãn từng dòng;
-  - vị trí ảnh chữ ký, căn chữ, cỡ chữ, màu, viền, dòng đầu in đậm.
+  - vị trí ảnh chữ ký: tự động, trái, phải, trên, dưới, nằm dưới chữ (chữ đè lên ảnh), hoặc tùy chỉnh (kéo ảnh trong khung xem trước để dời, kéo góc để đổi cỡ);
+  - căn chữ, cỡ chữ, màu, viền, dòng đầu in đậm.
 - Chèn ảnh chữ ký tay / con dấu (thư viện chữ ký dùng lại được).
 - Đặt và gỡ mật khẩu file.
 
