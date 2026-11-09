@@ -32,7 +32,9 @@ step "3/6  Du lieu ngon ngu Tesseract (vie, eng, osd)"
 mkdir -p "$VENDOR/tessdata"
 for l in vie eng osd chi_sim chi_tra jpn kor; do
   f="$VENDOR/tessdata/$l.traineddata"
-  [ -s "$f" ] || curl -L --fail -sS --retry 3 -o "$f" "https://github.com/tesseract-ocr/tessdata_fast/raw/main/$l.traineddata"
+  # tai thang tu raw.githubusercontent.com (duong github.com/.../raw/ co luc loi 504), loi thi lay qua CDN jsdelivr
+  [ -s "$f" ] || curl -L --fail -sS --retry 3 --retry-delay 5 -o "$f" "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/$l.traineddata" \
+    || curl -L --fail -sS --retry 3 --retry-delay 5 -o "$f" "https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@main/$l.traineddata"
 done
 note "tessdata: $(ls "$VENDOR/tessdata" | tr '\n' ' ')"
 
