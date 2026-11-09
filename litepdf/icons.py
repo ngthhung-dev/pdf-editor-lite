@@ -391,7 +391,7 @@ def paint_app_icon(size: int = 256) -> QPixmap:
     p.translate(146, 240)
     p.rotate(-45)
     w = 46 if small else 40
-    p.setPen(QPen(QColor("#FFFFFF"), 8))
+    p.setPen(QPen(QColor("#FFFFFF"), 3.5))
     p.setBrush(QColor(11, 87, 208))
     p.drawPolygon(QPolygonF([QPointF(0, 0), QPointF(40, -w / 2), QPointF(40, w / 2)]))
     p.setBrush(QColor(26, 115, 232))
