@@ -1,4 +1,4 @@
-﻿<#
+<#
   Build bo cai Windows cho PDF Editor Lite.
   Chay:  powershell -ExecutionPolicy Bypass -File packaging\windows\build_windows.ps1
   Tuy chon:
@@ -90,7 +90,9 @@ Step "3/8  Du lieu ngon ngu Tesseract (vie, eng, osd, chi_sim, chi_tra, jpn, kor
 $tess = Join-Path $vendor "tessdata"
 New-Item -ItemType Directory -Force -Path $tess | Out-Null
 foreach ($l in @("vie", "eng", "osd", "chi_sim", "chi_tra", "jpn", "kor")) {
-    Get-File "https://github.com/tesseract-ocr/tessdata_fast/raw/main/$l.traineddata" (Join-Path $tess "$l.traineddata")
+    # tai thang tu raw.githubusercontent.com (duong github.com/.../raw/ co luc loi 504), loi thi lay qua CDN jsdelivr
+    try { Get-File "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/$l.traineddata" (Join-Path $tess "$l.traineddata") }
+    catch { Get-File "https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@main/$l.traineddata" (Join-Path $tess "$l.traineddata") }
 }
 
 # ---------------------------------------------------------------- 4. Dong goi app
