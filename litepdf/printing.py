@@ -162,19 +162,49 @@ def draw_sheet(p: QPainter, w: float, h: float, upp: float, doc, pages: list, op
 
 
 def apply_options(printer: QPrinter, opts: PrintOptions) -> None:
+    """Chỉ đặt cho máy in những gì bắt buộc phải nhờ máy in làm (khổ giấy chọn tay, in hai mặt).
+    Số bản, màu xám, hướng giấy app tự làm (lặp trang, ảnh xám, xoay nội dung): trên Windows, mỗi lần Qt chỉnh các
+    thiết lập này nó ghi lại cấu hình máy in và làm mất khổ giấy tự đặt của máy in nhãn (vd. Zebra 70 × 100 mm còn
+    ~1 × 6 mm) nên in ra nhãn trắng."""
     if opts.paper:
         printer.setPageSize(QPageSize(getattr(QPageSize, opts.paper)))
-    printer.setCopyCount(max(1, opts.copies))
-    printer.setCollateCopies(opts.collate)
-    printer.setColorMode(QPrinter.GrayScale if opts.gray else QPrinter.Color)
-    printer.setDuplex({"none": QPrinter.DuplexNone, "long": QPrinter.DuplexLongSide,
-                       "short": QPrinter.DuplexShortSide}[opts.duplex])
+    if opts.duplex != "none":
+        printer.setDuplex({"long": QPrinter.DuplexLongSide, "short": QPrinter.DuplexShortSide}[opts.duplex])
+
+
+def paper_landscape(printer: QPrinter) -> bool:
+    full = printer.pageLayout().fullRect(QPageLayout.Point)
+    return full.width() > full.height()
+
+
+def sheet_layout(printer: QPrinter, doc, pages: list, opts: PrintOptions) -> QPageLayout:
+    """Bố cục tờ giấy cho một mặt in (bản sao, không đổi gì trên máy in): xoay ngang / dọc theo nội dung."""
+    lay = QPageLayout(printer.pageLayout())
+    lay.setOrientation(QPageLayout.Landscape if sheet_landscape(doc, pages, opts) else QPageLayout.Portrait)
+    return lay
+
+
+def print_sequence(sh: list[list], opts: PrintOptions) -> list[list]:
+    """Các mặt sẽ gửi tới máy in, đã nhân theo số bản (app tự lặp, không nhờ máy in)."""
+    n = max(1, opts.copies)
+    if n == 1:
+        return list(sh)
+    if opts.duplex != "none":                    # in hai mặt: mỗi tờ = 2 mặt, giữ đúng cặp trước / sau
+        base = list(sh) + ([[None] * len(sh[-1])] if len(sh) % 2 else [])
+        units = [base[i:i + 2] for i in range(0, len(base), 2)]
+    else:
+        units = [[s] for s in sh]
+    if opts.collate:
+        seq = units * n
+    else:
+        seq = [u for u in units for _ in range(n)]
+    return [s for u in seq for s in u]
 
 
 def run_print(printer: QPrinter, doc, opts: PrintOptions, parent=None) -> int:
-    """In thật. Trả về số tờ đã gửi."""
+    """In thật. Trả về số mặt đã gửi."""
     apply_options(printer, opts)
-    sh = sheets(opts)
+    sh = print_sequence(sheets(opts), opts)
     if not sh:
         return 0
     prog = QProgressDialog("Đang gửi lệnh in…", "Dừng", 0, len(sh), parent)
@@ -183,9 +213,11 @@ def run_print(printer: QPrinter, doc, opts: PrintOptions, parent=None) -> int:
     painter = None
     done = 0
     try:
+        to_pdf = printer.outputFormat() == QPrinter.PdfFormat
         for k, pages in enumerate(sh):
-            printer.setPageOrientation(QPageLayout.Landscape if sheet_landscape(doc, pages, opts)
-                                       else QPageLayout.Portrait)
+            if to_pdf:                           # lưu thành PDF (không qua driver): đổi hướng trang như bình thường
+                printer.setPageOrientation(QPageLayout.Landscape if sheet_landscape(doc, pages, opts)
+                                           else QPageLayout.Portrait)
             if painter is None:
                 painter = QPainter()
                 if not painter.begin(printer):
@@ -193,7 +225,15 @@ def run_print(printer: QPrinter, doc, opts: PrintOptions, parent=None) -> int:
             else:
                 printer.newPage()
             vp = painter.viewport()
-            draw_sheet(painter, vp.width(), vp.height(), printer.resolution() / 72.0, doc, pages, opts)
+            w, h = vp.width(), vp.height()
+            painter.save()
+            if sheet_landscape(doc, pages, opts) != paper_landscape(printer):
+                # cần tờ ngang mà giấy trong máy đang dọc (hoặc ngược lại): xoay nội dung 90° thay vì đổi hướng giấy
+                painter.translate(w, 0)
+                painter.rotate(90)
+                w, h = h, w
+            draw_sheet(painter, w, h, printer.resolution() / 72.0, doc, pages, opts)
+            painter.restore()
             done += 1
             prog.setValue(k + 1)
             QApplication.processEvents()
@@ -497,10 +537,9 @@ class PrintDialog(QDialog):
         self.sheet = max(0, min(self.sheet, len(sh) - 1))
         pages = sh[self.sheet]
         pr = self.printer
-        apply_options(pr, opts)
-        pr.setPageOrientation(QPageLayout.Landscape if sheet_landscape(self.doc, pages, opts)
-                              else QPageLayout.Portrait)
-        lay = pr.pageLayout()
+        if opts.paper:                           # khổ giấy chọn tay: máy in phải biết để xem trước đúng khổ
+            pr.setPageSize(QPageSize(getattr(QPageSize, opts.paper)))
+        lay = sheet_layout(pr, self.doc, pages, opts)    # không chỉnh máy in (giữ khổ giấy tự đặt của máy in nhãn)
         full = lay.fullRect(QPageLayout.Point)
         paint = lay.paintRect(QPageLayout.Point)
         dpr = self.devicePixelRatioF()
