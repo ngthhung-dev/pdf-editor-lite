@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass, field
 
 import pymupdf
@@ -165,11 +166,14 @@ def apply_options(printer: QPrinter, opts: PrintOptions) -> None:
     """Chỉ đặt cho máy in những gì bắt buộc phải nhờ máy in làm (khổ giấy chọn tay, in hai mặt).
     Số bản, màu xám, hướng giấy app tự làm (lặp trang, ảnh xám, xoay nội dung): trên Windows, mỗi lần Qt chỉnh các
     thiết lập này nó ghi lại cấu hình máy in và làm mất khổ giấy tự đặt của máy in nhãn (vd. Zebra 70 × 100 mm còn
-    ~1 × 6 mm) nên in ra nhãn trắng."""
+    ~1 × 6 mm) nên in ra nhãn trắng.
+    In một / hai mặt thì luôn đặt rõ: nhiều máy in văn phòng (vd. Xerox WorkCentre 5335) mặc định in hai mặt, không
+    đặt "một mặt" thì 2 bản bị in dồn lên hai mặt của 1 tờ. Đặt DuplexNone không làm mất khổ giấy của máy in nhãn
+    (đã thử với Zebra ZD220 / GK420t)."""
     if opts.paper:
         printer.setPageSize(QPageSize(getattr(QPageSize, opts.paper)))
-    if opts.duplex != "none":
-        printer.setDuplex({"long": QPrinter.DuplexLongSide, "short": QPrinter.DuplexShortSide}[opts.duplex])
+    printer.setDuplex({"none": QPrinter.DuplexNone, "long": QPrinter.DuplexLongSide,
+                       "short": QPrinter.DuplexShortSide}[opts.duplex])
 
 
 def paper_landscape(printer: QPrinter) -> bool:
@@ -203,13 +207,26 @@ def print_sequence(sh: list[list], opts: PrintOptions) -> list[list]:
 
 def run_print(printer: QPrinter, doc, opts: PrintOptions, parent=None) -> int:
     """In thật. Trả về số mặt đã gửi."""
-    apply_options(printer, opts)
     sh = print_sequence(sheets(opts), opts)
     if not sh:
         return 0
     prog = QProgressDialog("Đang gửi lệnh in…", "Dừng", 0, len(sh), parent)
     prog.setWindowModality(Qt.WindowModal)
     prog.setMinimumDuration(400)
+    if sys.platform.startswith("win") and printer.outputFormat() == QPrinter.NativeFormat:
+        from . import winprint
+        dm = None
+        try:
+            dm = winprint.job_devmode(printer.printerName(), opts.duplex, True if opts.gray else None,
+                                      _job_paper_id(printer, opts))
+        except (winprint.PrintError, OSError):
+            dm = None                            # driver không cho hợp nhất cấu hình: in theo cách cũ của Qt
+        if dm is not None:
+            try:
+                return _run_print_gdi(printer, doc, opts, sh, prog, dm)
+            finally:
+                prog.close()
+    apply_options(printer, opts)
     painter = None
     done = 0
     try:
@@ -243,6 +260,54 @@ def run_print(printer: QPrinter, doc, opts: PrintOptions, parent=None) -> int:
         if painter is not None and painter.isActive():
             painter.end()
         prog.close()
+    return done
+
+
+def _job_paper_id(printer: QPrinter, opts: PrintOptions) -> int:
+    """Mã khổ giấy Windows (DMPAPER) cần đặt cho lệnh in, 0 = giữ khổ mặc định của máy in (vd. khổ nhãn tự đặt)."""
+    if opts.paper:
+        return QPageSize(getattr(QPageSize, opts.paper)).windowsId()
+    cur = printer.pageLayout().pageSize()        # khổ chọn trong “Thiết lập máy in…” (hộp thoại của Windows)
+    default = QPrinterInfo.printerInfo(printer.printerName()).defaultPageSize()
+    wid = cur.windowsId()
+    if 0 < wid < 256 and wid != default.windowsId():
+        return wid
+    return 0
+
+
+def _run_print_gdi(printer: QPrinter, doc, opts: PrintOptions, sh: list[list], prog, dm) -> int:
+    """In trên Windows qua GDI với cấu hình do driver hợp nhất (xem winprint.py)."""
+    from . import winprint
+    name = printer.printerName()
+    job = winprint.GdiJob(name, printer.docName() or "PDF Editor Lite", dm, printer.outputFileName() or None)
+    done, ok = 0, False
+    try:
+        job.begin()
+        for k, pages in enumerate(sh):
+            w, h, dpi, _dpy = job.caps()
+            f = min(1.0, 300.0 / max(1, dpi))   # kết xuất tối đa 300 dpi, máy in tự kéo lên độ phân giải của nó
+            img = QImage(max(1, round(w * f)), max(1, round(h * f)), QImage.Format_RGB32)
+            img.fill(Qt.white)
+            p = QPainter(img)
+            iw, ih = img.width(), img.height()
+            if sheet_landscape(doc, pages, opts) != (w > h):
+                # cần tờ ngang mà giấy trong máy đang dọc (hoặc ngược lại): xoay nội dung 90° thay vì đổi hướng giấy
+                p.translate(iw, 0)
+                p.rotate(90)
+                iw, ih = ih, iw
+            draw_sheet(p, iw, ih, dpi / 72.0 * f, doc, pages, opts)
+            p.end()
+            job.page(img)
+            done += 1
+            prog.setValue(k + 1)
+            QApplication.processEvents()
+            if prog.wasCanceled():
+                break
+        ok = True
+    except winprint.PrintError as e:
+        raise tools.PdfError(str(e))
+    finally:
+        job.end(ok)
     return done
 
 
