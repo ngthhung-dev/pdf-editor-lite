@@ -2111,7 +2111,7 @@ class MainWindow(QMainWindow):
         if not dlg.exec():
             return
         self.cfg.save()
-        n = run_print(dlg.result_printer, t.model.doc, dlg.result_opts, self)
+        n = run_print(dlg.result_printer, t.model.doc, dlg.result_opts, self, getattr(dlg, "result_devmode", None))
         if dlg.out_file:
             self.msg(f"Đã lưu bản in: {dlg.out_file}")
         else:

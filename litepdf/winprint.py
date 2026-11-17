@@ -70,19 +70,53 @@ def _set16(buf, off, v):
     buf[off:off + 2] = int(v).to_bytes(2, "little", signed=True)
 
 
-def job_devmode(printer: str, duplex: str = "none", gray: bool | None = None, paper_id: int = 0):
-    """Cấu hình in cho một lệnh in: lấy cấu hình mặc định của máy in rồi nhờ driver hợp nhất các thay đổi
-    (một / hai mặt, đen trắng, khổ giấy chuẩn nếu người dùng chọn). Trả về bộ đệm DEVMODE đã hợp nhất."""
+DM_IN_PROMPT, IDOK = 4, 1
+
+
+def _open(printer: str):
     ws, _gdi = _api()
     h = wintypes.HANDLE()
     if not ws.OpenPrinterW(printer, ctypes.byref(h), None):
         raise PrintError(f"Không mở được máy in “{printer}”.")
+    n = ws.DocumentPropertiesW(None, h, printer, None, None, 0)
+    if n <= 0:
+        ws.ClosePrinter(h)
+        raise PrintError("Không đọc được cấu hình của máy in.")
+    return ws, h, n
+
+
+def prompt_devmode(hwnd: int, printer: str, base=None):
+    """Mở hộp “Tuỳ chọn in” (Printing Preferences) của chính driver máy in, bắt đầu từ cấu hình `base` (hoặc mặc
+    định). Trả về cấu hình người dùng chọn (khay giấy, chất lượng, khổ giấy, một / hai mặt…), None nếu bấm Huỷ."""
+    ws, h, n = _open(printer)
     try:
-        n = ws.DocumentPropertiesW(None, h, printer, None, None, 0)
-        if n <= 0:
-            raise PrintError("Không đọc được cấu hình của máy in.")
+        out = ctypes.create_string_buffer(n)
+        src = base if base is not None and len(base) == n else None
+        mode = DM_IN_PROMPT | DM_OUT_BUFFER | (DM_IN_BUFFER if src is not None else 0)
+        r = ws.DocumentPropertiesW(hwnd, h, printer, out, src, mode)
+        return out if r == IDOK else None
+    finally:
+        ws.ClosePrinter(h)
+
+
+def devmode_settings(dm) -> dict:
+    """Các thiết lập đọc từ cấu hình in: khổ giấy (mã DMPAPER, rộng / dài theo 0,1 mm), một / hai mặt, màu, số bản."""
+    dup = {1: "none", 2: "long", 3: "short"}.get(_u16(dm, OFF_DUPLEX), "none")
+    return {"paper": _u16(dm, OFF_PAPER), "length": _u16(dm, 80), "width": _u16(dm, 82), "duplex": dup,
+            "gray": _u16(dm, OFF_COLOR) == DMCOLOR_MONOCHROME, "copies": max(1, _u16(dm, OFF_COPIES)),
+            "orientation": _u16(dm, OFF_ORIENT)}
+
+
+def job_devmode(printer: str, duplex: str = "none", gray: bool | None = None, paper_id: int = 0, base=None):
+    """Cấu hình in cho một lệnh in: bắt đầu từ `base` (cấu hình chọn trong “Thiết lập máy in…”) hoặc cấu hình mặc
+    định của máy in, rồi nhờ driver hợp nhất các thay đổi (một / hai mặt, đen trắng / màu, khổ giấy chuẩn nếu người
+    dùng chọn). Trả về bộ đệm DEVMODE đã hợp nhất."""
+    ws, h, n = _open(printer)
+    try:
         dm = ctypes.create_string_buffer(n)
-        if ws.DocumentPropertiesW(None, h, printer, dm, None, DM_OUT_BUFFER) < 0:
+        if base is not None and len(base) == n:
+            ctypes.memmove(dm, base, n)
+        elif ws.DocumentPropertiesW(None, h, printer, dm, None, DM_OUT_BUFFER) < 0:
             raise PrintError("Không đọc được cấu hình của máy in.")
         fields = int.from_bytes(dm[OFF_FIELDS:OFF_FIELDS + 4], "little")
         _set16(dm, OFF_DUPLEX, DMDUP[duplex])
