@@ -205,8 +205,11 @@ def print_sequence(sh: list[list], opts: PrintOptions) -> list[list]:
     return [s for u in seq for s in u]
 
 
-def run_print(printer: QPrinter, doc, opts: PrintOptions, parent=None) -> int:
-    """In thật. Trả về số mặt đã gửi."""
+def run_print(printer: QPrinter, doc, opts: PrintOptions, parent=None, devmode=None) -> int:
+    """In thật. Trả về số mặt đã gửi. devmode: cấu hình chọn trong “Thiết lập máy in…” (Windows), giữ khay giấy,
+    chất lượng… của driver; các lựa chọn trong hộp In của app (mặt in, màu, khổ giấy chọn tay) đè lên."""
+    if printer.outputFormat() == QPrinter.PdfFormat:   # lưu PDF: không có bản sao, không có mặt sau
+        opts = PrintOptions(**{**opts.__dict__, "copies": 1, "duplex": "none"})
     sh = print_sequence(sheets(opts), opts)
     if not sh:
         return 0
@@ -217,8 +220,8 @@ def run_print(printer: QPrinter, doc, opts: PrintOptions, parent=None) -> int:
         from . import winprint
         dm = None
         try:
-            dm = winprint.job_devmode(printer.printerName(), opts.duplex, True if opts.gray else None,
-                                      _job_paper_id(printer, opts))
+            dm = winprint.job_devmode(printer.printerName(), opts.duplex, bool(opts.gray),
+                                      _job_paper_id(printer, opts, devmode is not None), devmode)
         except (winprint.PrintError, OSError):
             dm = None                            # driver không cho hợp nhất cấu hình: in theo cách cũ của Qt
         if dm is not None:
@@ -263,10 +266,13 @@ def run_print(printer: QPrinter, doc, opts: PrintOptions, parent=None) -> int:
     return done
 
 
-def _job_paper_id(printer: QPrinter, opts: PrintOptions) -> int:
-    """Mã khổ giấy Windows (DMPAPER) cần đặt cho lệnh in, 0 = giữ khổ mặc định của máy in (vd. khổ nhãn tự đặt)."""
+def _job_paper_id(printer: QPrinter, opts: PrintOptions, from_dialog: bool = False) -> int:
+    """Mã khổ giấy Windows (DMPAPER) cần đặt cho lệnh in, 0 = giữ khổ đang có (mặc định của máy in, khổ nhãn tự đặt,
+    hoặc khổ chọn trong “Thiết lập máy in…”)."""
     if opts.paper:
         return QPageSize(getattr(QPageSize, opts.paper)).windowsId()
+    if from_dialog:
+        return 0
     cur = printer.pageLayout().pageSize()        # khổ chọn trong “Thiết lập máy in…” (hộp thoại của Windows)
     default = QPrinterInfo.printerInfo(printer.printerName()).defaultPageSize()
     wid = cur.windowsId()
@@ -323,9 +329,11 @@ class PrintDialog(QDialog):
         self.selected = selected
         self.cfg = cfg
         self.printer: QPrinter | None = None
+        self.devmode = None                      # cấu hình chọn trong hộp “Tuỳ chọn in” của driver (Windows)
         self.sheet = 0
         self.result_printer: QPrinter | None = None
         self.result_opts: PrintOptions | None = None
+        self.result_devmode = None
         n = doc.page_count
         saved = cfg.get("print", {})
 
@@ -524,10 +532,14 @@ class PrintDialog(QDialog):
 
     def options(self) -> PrintOptions:
         bk = self.nup.currentData() == "booklet"
+        is_pdf = self.printer_box.currentData() == PDF_PRINTER
         duplex = self.duplex.currentData()
         if bk:  # booklet hai mặt luôn lật theo cạnh ngắn; in tay từng lượt thì in một mặt
             duplex = "short" if self.bk_side.currentData() == "both" else "none"
-        return PrintOptions(pages=self._page_list(), copies=self.copies.value(), collate=self.collate.isChecked(),
+        if is_pdf:  # lưu thành PDF: ô số bản / mặt in bị khoá, không dùng giá trị còn sót lại
+            duplex = "none"
+        return PrintOptions(pages=self._page_list(), copies=1 if is_pdf else self.copies.value(),
+                            collate=self.collate.isChecked(),
                             paper=self.paper.currentData(), orientation=self.orient.currentData(),
                             scale=self.scale.currentData(), percent=self.percent.value(),
                             nup=2 if bk else self.nup.currentData(), borders=self.borders.isChecked(),
@@ -538,6 +550,7 @@ class PrintDialog(QDialog):
 
     def _printer_changed(self):
         name = self.printer_box.currentData()
+        self.devmode = None
         if name == PDF_PRINTER:
             self.printer = QPrinter(QPrinter.HighResolution)
             self.printer.setOutputFormat(QPrinter.PdfFormat)
@@ -657,6 +670,9 @@ class PrintDialog(QDialog):
         if self.printer_box.currentData() == PDF_PRINTER:
             QMessageBox.information(self, "In", "Mục này chỉ dùng cho máy in thật.")
             return
+        if sys.platform.startswith("win"):
+            if self._driver_dialog():
+                return
         d = QPrintDialog(self.printer, self)
         d.setWindowTitle("Thiết lập máy in")
         if d.exec():
@@ -668,6 +684,41 @@ class PrintDialog(QDialog):
             self.copies.setValue(max(1, self.printer.copyCount()))
             self.paper.setCurrentIndex(0)  # giữ khổ giấy vừa chọn trong hộp thoại hệ thống
             self._changed()
+
+    def _driver_dialog(self) -> bool:
+        """Windows: mở hộp “Tuỳ chọn in” của chính driver (khay giấy, chất lượng, khổ giấy, một / hai mặt…). Cấu hình
+        chọn ở đó được giữ để in; các ô của hộp In (mặt in, màu, số bản, khổ giấy) đổi theo. False = không mở được."""
+        from . import winprint
+        name = self.printer_box.currentData()
+        try:
+            dm = winprint.prompt_devmode(int(self.winId()), name, self.devmode)
+        except (winprint.PrintError, OSError):
+            return False
+        if dm is None:                          # bấm Huỷ trong hộp của driver
+            return True
+        self.devmode = dm
+        s = winprint.devmode_settings(dm)
+        for box, val in ((self.duplex, s["duplex"]), (self.gray, s["gray"])):
+            j = box.findData(val)
+            if j >= 0:
+                box.blockSignals(True)
+                box.setCurrentIndex(j)
+                box.blockSignals(False)
+        if s["copies"] > 1:
+            self.copies.setValue(s["copies"])
+        # khổ giấy: dùng khổ chọn trong hộp của driver (ô Khổ giấy về “Theo mặc định của máy in”), xem trước theo khổ đó
+        self.paper.blockSignals(True)
+        self.paper.setCurrentIndex(0)
+        self.paper.blockSignals(False)
+        pid = QPageSize.id(s["paper"]) if s["paper"] > 0 else QPageSize.Custom
+        if pid != QPageSize.Custom:
+            self.printer.setPageSize(QPageSize(pid))
+        elif s["width"] > 0 and s["length"] > 0:
+            from PySide6.QtCore import QSizeF
+            self.printer.setPageSize(QPageSize(QSizeF(s["width"] / 10, s["length"] / 10), QPageSize.Millimeter,
+                                               "", QPageSize.ExactMatch))
+        self._changed()
+        return True
 
     def accept(self):
         try:
@@ -695,4 +746,5 @@ class PrintDialog(QDialog):
                              "duplex": opts.duplex, "gray": opts.gray, "annots": opts.annots,
                              "borders": opts.borders}
         self.result_printer, self.result_opts = self.printer, opts
+        self.result_devmode = self.devmode
         super().accept()
