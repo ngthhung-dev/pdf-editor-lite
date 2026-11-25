@@ -13,6 +13,8 @@ def status_rows(st: dict) -> str:
         row("Ảnh → PDF", True, "Sẵn sàng (có sẵn trong app).", ""),
         row("Word / Excel / PowerPoint → PDF", bool(st.get("office")), "Sẵn sàng (" + str(st.get("office")) + ").",
             "Chưa có LibreOffice hoặc Microsoft Office. " + st.get("add", "")),
+        row("Visio → PDF / Ảnh", bool(st.get("visio")), "Sẵn sàng (" + str(st.get("visio")) + ").",
+            "Chưa có Microsoft Visio hoặc LibreOffice. " + st.get("add", "")),
         row("PDF → Word", st.get("pdf2docx"), "Sẵn sàng.", "Thiếu thư viện pdf2docx."),
         row("PDF → Excel", st.get("openpyxl"), "Sẵn sàng.", "Thiếu thư viện openpyxl."),
         row("PDF → Ảnh, Văn bản, HTML", True, "Sẵn sàng (có sẵn trong app).", ""),

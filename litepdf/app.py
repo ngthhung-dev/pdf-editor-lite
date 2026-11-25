@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -40,14 +41,17 @@ CONTACT_PHONE = "0968 799 365"
 COPYRIGHT = "Copyright © 2026 ngthhung"
 DEFAULT_SIZE = (1100, 720)  # kích thước cửa sổ khi mở app
 OPEN_FILTER = ("Tất cả file hỗ trợ (*.pdf *.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp *.doc *.docx *.xls "
-               "*.xlsx *.ppt *.pptx *.odt *.ods *.odp *.rtf *.txt *.html *.htm *.epub *.xps *.svg);;"
+               "*.xlsx *.ppt *.pptx *.odt *.ods *.odp *.rtf *.txt *.html *.htm *.epub *.xps *.svg *.vsdx *.vsdm *.vsd *.vdx);;"
                "PDF (*.pdf);;Ảnh (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp);;"
-               "Office (*.doc *.docx *.xls *.xlsx *.ppt *.pptx *.odt *.ods *.odp *.rtf);;Tất cả (*)")
+               "Office (*.doc *.docx *.xls *.xlsx *.ppt *.pptx *.odt *.ods *.odp *.rtf);;"
+               "Visio (*.vsdx *.vsdm *.vsd *.vdx);;Tất cả (*)")
 IMG_FILTER = "Ảnh (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp)"
 TOPDF_FILTER = ("Ảnh và file văn phòng (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp *.doc *.docx *.xls *.xlsx "
-                "*.ppt *.pptx *.odt *.ods *.odp *.rtf *.txt *.html *.htm *.epub *.xps *.svg);;"
+                "*.ppt *.pptx *.odt *.ods *.odp *.rtf *.txt *.html *.htm *.epub *.xps *.svg *.vsdx *.vsdm *.vsd *.vdx);;"
                 "Ảnh (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp);;"
-                "Word (*.doc *.docx *.odt *.rtf);;Excel (*.xls *.xlsx *.ods);;PowerPoint (*.ppt *.pptx *.odp);;Tất cả (*)")
+                "Word (*.doc *.docx *.odt *.rtf);;Excel (*.xls *.xlsx *.ods);;PowerPoint (*.ppt *.pptx *.odp);;"
+                "Visio (*.vsdx *.vsdm *.vsd *.vdx);;Tất cả (*)")
+VISIO_FILTER = "Visio (*.vsdx *.vsdm *.vsd *.vdx);;Tất cả (*)"
 
 # Bảng phím tắt (tên mục menu -> phím). Quy ước để dễ nhớ, mỗi nhóm một kiểu:
 #   Ctrl + chữ          thao tác cơ bản quen thuộc (mở, lưu, in, hoàn tác, tìm, bookmark)
@@ -59,7 +63,7 @@ TOPDF_FILTER = ("Ảnh và file văn phòng (*.png *.jpg *.jpeg *.bmp *.gif *.ti
 SHORTCUTS = {
     # Tệp
     "Mở…": "Ctrl+O", "PDF trắng mới": "Ctrl+N", "Ảnh / Word / Excel / PowerPoint → PDF…": "Ctrl+Shift+O",
-    "Ghép nhiều ảnh thành một PDF…": "Ctrl+Shift+I", "Gộp nhiều file thành một PDF…": "Ctrl+Shift+M",
+    "Ghép nhiều ảnh thành một PDF…": "Ctrl+Shift+I", "Visio (.vsdx) → PDF / Ảnh chất lượng cao…": "Ctrl+Alt+V", "Gộp nhiều file thành một PDF…": "Ctrl+Shift+M",
     "Lưu": "Ctrl+S", "Lưu thành…": "Ctrl+Shift+S", "In…": "Ctrl+P", "Thông tin tài liệu": "Ctrl+D",
     "Đóng tab": "Ctrl+W", "Thoát": "Ctrl+Q",
     # Sửa
@@ -1105,6 +1109,8 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         A("Ảnh / Word / Excel / PowerPoint → PDF…", self.convert_dialog, doc=False, menu=m,
           tip="Chọn ảnh hoặc file Word, Excel, PowerPoint để tạo thành PDF")
+        A("Visio (.vsdx) → PDF / Ảnh chất lượng cao…", self.visio_convert, doc=False, menu=m,
+          tip="Chuyển một hoặc nhiều bản vẽ Visio sang PDF vector hoặc ảnh PNG / JPG / SVG độ phân giải cao")
         A("Ghép nhiều ảnh thành một PDF…", self.images_to_pdf, doc=False, menu=m)
         self.a_merge = A("Gộp nhiều file thành một PDF…", self.merge, None, "merge", doc=False, menu=m)
         m.addSeparator()
@@ -1316,6 +1322,10 @@ class MainWindow(QMainWindow):
             st["office"] = "LibreOffice" if so else ("Microsoft Office" if tools.has_ms_office() else "")
         except Exception:
             st["office"] = ""
+        try:
+            st["visio"] = tools.visio_engine()
+        except Exception:
+            st["visio"] = ""
         try:
             st["local"] = ", ".join(f"{n} ({len(ms)} model)" for n, _b, ms in T.detect_local())
         except Exception:
@@ -1693,6 +1703,99 @@ class MainWindow(QMainWindow):
         ps, _ = QFileDialog.getOpenFileNames(self, "Chọn file để tạo PDF", self.cfg.get("last_dir", ""), TOPDF_FILTER)
         for p in ps:
             self.open_path(p)
+
+    def visio_convert(self):
+        """Chuyển một hoặc nhiều file Visio sang PDF vector hoặc ảnh chất lượng cao."""
+        eng = tools.visio_engine()
+        if not eng:
+            raise tools.PdfError("Cần Microsoft Visio hoặc LibreOffice (miễn phí) để chuyển file Visio.\n\n"
+                                 + ("Chạy lại bộ cài PDF Editor Lite và tích thành phần LibreOffice, hoặc cài "
+                                    "LibreOffice từ libreoffice.org." if sys.platform.startswith("win") else
+                                    "Cài LibreOffice từ libreoffice.org rồi thử lại."))
+        ps, _ = QFileDialog.getOpenFileNames(self, "Chọn file Visio", self.cfg.get("last_dir", ""), VISIO_FILTER)
+        if not ps:
+            return
+        o = form_dialog(self, "Visio → PDF / Ảnh", [
+            ("fmt", "Xuất ra", "choice", self.cfg.get("visio_fmt", "pdf"), [
+                ("pdf", "PDF vector (nét ở mọi mức phóng, in đẹp nhất)"),
+                ("png", "PNG (ảnh không mất chất lượng)"),
+                ("jpg", "JPG (chất lượng 100, file nhỏ hơn PNG)"),
+                ("svg", "SVG (vector, chèn web / Word / thiết kế)")]),
+            ("dpi", "Độ phân giải ảnh PNG / JPG (DPI)", "int", self.cfg.get("visio_dpi", 300), (72, 1200)),
+            ("transparent", "PNG nền trong suốt", "bool", self.cfg.get("visio_transparent", False)),
+            ("open", "Mở PDF trong app sau khi chuyển", "bool", self.cfg.get("visio_open", len(ps) == 1))],
+            note=f"Công cụ dựng bản vẽ: {eng}"
+                 + (" (đúng như bản gốc)." if eng == "Microsoft Visio" else
+                    ". Máy có Microsoft Visio thì app tự dùng Visio để giống bản gốc nhất.")
+                 + "\n300 DPI là chuẩn in ấn; 600 DPI cho bản vẽ nhiều chi tiết nhỏ. Trang khổ rất lớn được tự hạ DPI "
+                   "để không tràn bộ nhớ.",
+            ok_text="Chọn thư mục lưu…")
+        if o is None:
+            return
+        self.cfg.update(visio_fmt=o["fmt"], visio_dpi=o["dpi"], visio_transparent=o["transparent"], visio_open=o["open"])
+        d = QFileDialog.getExistingDirectory(self, "Chọn thư mục lưu", os.path.dirname(ps[0]))
+        if not d:
+            return
+        self.cfg["last_dir"] = os.path.dirname(ps[0])
+        self.cfg.save()
+        fmt = o["fmt"]
+        outs: list[str] = []
+        errs: list[str] = []
+        lowered: list[str] = []
+        engines: set[str] = set()
+        prog, cb = self.progress("Đang chuyển file Visio…")
+        try:
+            for k, p in enumerate(ps):
+                prog.setLabelText(f"Đang chuyển {os.path.basename(p)} ({k + 1}/{len(ps)})…")
+                cb(k, len(ps))
+                stem = Path(p).stem
+                try:
+                    with tempfile.TemporaryDirectory() as td:
+                        pdf = os.path.join(td, "o.pdf")
+                        engines.add(tools.visio_to_pdf(p, pdf))
+                        if fmt == "pdf":
+                            dst = self._free_name(os.path.join(d, stem + ".pdf"))
+                            shutil.copyfile(pdf, dst)
+                            outs.append(dst)
+                            continue
+                        doc = pymupdf.open(pdf)
+                        try:
+                            files, low = tools.export_pdf_pages(doc, d, stem, fmt, o["dpi"], o["transparent"])
+                        finally:
+                            doc.close()
+                        outs += files
+                        lowered += [f"{os.path.basename(p)} trang {n}: {v} DPI" for n, v in low]
+                except tools.PdfError as e:
+                    errs.append(f"{os.path.basename(p)}: {e}")
+                except Exception as e:
+                    errs.append(f"{os.path.basename(p)}: {type(e).__name__}: {e}")
+            cb(len(ps), len(ps))
+        finally:
+            prog.close()
+        if fmt == "pdf" and o["open"]:
+            for f in outs:
+                self.open_path(f)
+        lines = []
+        if outs:
+            kind = {"pdf": "file PDF", "png": "ảnh PNG", "jpg": "ảnh JPG", "svg": "file SVG"}[fmt]
+            lines.append(f"Đã xuất {len(outs)} {kind} bằng {', '.join(sorted(engines))} vào:\n{d}")
+        if lowered:
+            lines.append("Trang khổ quá lớn, đã tự hạ độ phân giải để không tràn bộ nhớ:\n" + "\n".join(lowered[:10]))
+        if errs:
+            lines.append("Không chuyển được:\n" + "\n".join(errs[:10]))
+        (self.error if errs and not outs else self.info)("\n\n".join(lines))
+        self.msg(f"Đã chuyển {len(ps) - len(errs)}/{len(ps)} file Visio.")
+
+    @staticmethod
+    def _free_name(path: str) -> str:
+        """Tên file chưa có trên đĩa: thêm (2), (3)… nếu trùng, để không ghi đè file sẵn có."""
+        if not os.path.exists(path):
+            return path
+        stem, ext = os.path.splitext(path)
+        i = 2
+        while os.path.exists(f"{stem} ({i}){ext}"):
+            i += 1
+        return f"{stem} ({i}){ext}"
 
     def open_dialog(self):
         ps, _ = QFileDialog.getOpenFileNames(self, "Mở file", self.cfg.get("last_dir", ""), OPEN_FILTER)

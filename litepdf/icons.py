@@ -310,7 +310,7 @@ MENU_ICONS = {
     "Xoá tất cả bookmark": "bookmark_del",
     "Dịch tài liệu sang ngôn ngữ khác…": "translate", "Rà soát / sửa câu dịch của trang này…": "edittext", "PDF → Word (.docx)…": "word", "PDF → Excel (.xlsx)…": "excel", "PDF → Ảnh (PNG/JPG)…": "toimg",
     "PDF → Văn bản (.txt)…": "txt", "Xuất mọi hình ảnh trong PDF ra thư mục…": "saveimg", "PDF → HTML…": "html",
-    "Ảnh / Word / Excel / PowerPoint → PDF…": "topdf", "Nhận dạng chữ (OCR) cho bản scan…": "ocr",
+    "Ảnh / Word / Excel / PowerPoint → PDF…": "topdf", "Visio (.vsdx) → PDF / Ảnh chất lượng cao…": "toimg", "Nhận dạng chữ (OCR) cho bản scan…": "ocr",
     "Nén giảm dung lượng…": "compress",
     "Ký số không hiện khung chữ ký…": "signhidden", "Gỡ mật khẩu": "unlock",
     "Mở thư mục chứng thư gốc tin cậy": "certfolder", "Giới thiệu": "info", "Kiểm tra cập nhật…": "update", "Danh sách phím tắt": "keys", "Hướng dẫn sử dụng": "guide",
