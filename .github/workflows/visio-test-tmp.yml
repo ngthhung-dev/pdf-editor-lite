@@ -1,0 +1,34 @@
+name: Thu tam Visio (xoa truoc khi merge)
+
+on:
+  push:
+    branches: [visio-to-pdf-image]
+
+jobs:
+  visio:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "PyMuPDF>=1.26"
+      - name: Cai LibreOffice (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libreoffice-draw fonts-dejavu
+      - name: Cai LibreOffice (Windows)
+        if: runner.os == 'Windows'
+        run: choco install libreoffice-fresh -y --no-progress
+      - name: Chuyen file Visio mau
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python .github/visio-test/check.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visio-out-${{ matrix.os }}
+          path: visio-out
