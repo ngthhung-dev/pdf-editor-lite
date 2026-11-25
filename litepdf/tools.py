@@ -20,7 +20,8 @@ pymupdf.TOOLS.mupdf_display_errors(False)
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp", ".jfif"}
 OFFICE_EXT = {".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".rtf"}
 MUPDF_EXT = {".txt", ".html", ".htm", ".epub", ".xps", ".svg", ".fb2", ".cbz", ".mobi", ".md"}
-ALL_INPUT_EXT = {".pdf"} | IMAGE_EXT | OFFICE_EXT | MUPDF_EXT
+VISIO_EXT = {".vsdx", ".vsdm", ".vsd", ".vdx"}
+ALL_INPUT_EXT = {".pdf"} | IMAGE_EXT | OFFICE_EXT | MUPDF_EXT | VISIO_EXT
 
 
 class PdfError(Exception):
@@ -305,7 +306,134 @@ def office_to_pdf(src: str, out: str) -> str:
     raise PdfError("Cần cài LibreOffice (miễn phí) hoặc Microsoft Office để chuyển định dạng này sang PDF.")
 
 
-PAPER_PT = {"A4": (595.28, 841.89), "A3": (841.89, 1190.55), "A5": (419.53, 595.28), "Letter": (612, 792),
+# ------------------------------------------------------------------ Visio
+def has_ms_visio() -> bool:
+    """Máy Windows có Microsoft Visio không (dựng file Visio đúng nhất)."""
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        import winreg
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "Visio.InvisibleApp"))
+        return True
+    except Exception:
+        return False
+
+
+def visio_engine() -> str:
+    """Công cụ sẽ dùng để chuyển file Visio: 'Microsoft Visio', 'LibreOffice' hoặc '' (máy chưa có)."""
+    if has_ms_visio():
+        return "Microsoft Visio"
+    return "LibreOffice" if find_soffice() else ""
+
+
+# Visio chạy ẩn, mở chỉ đọc, tắt macro, xuất PDF loại in ấn (giữ vector, ảnh nguyên độ phân giải, có trang nền).
+_PS_VISIO = r"""
+$ErrorActionPreference='Stop'
+$src=$env:LITEPDF_SRC; $dst=$env:LITEPDF_DST
+$a=New-Object -ComObject Visio.InvisibleApp
+try {
+  try { $a.AlertResponse=1 } catch {}
+  $d=$a.Documents.OpenEx($src, 2+8+128)
+  try { $d.ExportAsFixedFormat(1, $dst, 1, 0, 1, 1, $false, $true, $true, $true, $false) }
+  finally { $d.Close() }
+} finally { $a.Quit() }
+"""
+
+# Bộ lọc PDF của LibreOffice Draw: nén ảnh không mất chất lượng, không giảm độ phân giải ảnh.
+_LO_DRAW_PDF = ('pdf:draw_pdf_Export:{"UseLosslessCompression":{"type":"boolean","value":"true"},'
+                '"ReduceImageResolution":{"type":"boolean","value":"false"},'
+                '"Quality":{"type":"long","value":"100"},'
+                '"ExportBookmarks":{"type":"boolean","value":"true"}}')
+
+
+def _soffice_convert(so: str, src: str, td: str, target: str) -> tuple[Path | None, str]:
+    prof = Path(td, "profile").as_uri()
+    r = subprocess.run([so, f"-env:UserInstallation={prof}", "--headless", "--convert-to", target,
+                        "--outdir", td, src], capture_output=True, timeout=600,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    res = Path(td, Path(src).stem + ".pdf")
+    return (res if res.exists() and res.stat().st_size > 0 else None), r.stderr.decode(errors="ignore")[-300:]
+
+
+def visio_to_pdf(src: str, out: str) -> str:
+    """Chuyển file Visio (.vsdx, .vsdm, .vsd, .vdx) sang PDF dạng vector, giữ chất lượng cao nhất.
+    Ưu tiên Microsoft Visio (đúng nhất), không có thì dùng LibreOffice. Trả về tên công cụ đã dùng."""
+    src = os.path.abspath(src)
+    out = os.path.abspath(out)
+    err = ""
+    if has_ms_visio():
+        if os.path.exists(out):
+            os.unlink(out)
+        env = dict(os.environ, LITEPDF_SRC=src, LITEPDF_DST=out)
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_VISIO],
+                               env=env, capture_output=True, timeout=600,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if os.path.exists(out) and os.path.getsize(out) > 0:
+                return "Microsoft Visio"
+            err = r.stderr.decode(errors="ignore")[-300:]
+        except Exception as e:
+            err = str(e)
+    so = find_soffice()
+    if so:
+        with tempfile.TemporaryDirectory() as td:
+            res, err2 = _soffice_convert(so, src, td, _LO_DRAW_PDF)
+            if res is None:                     # LibreOffice cũ chưa hiểu tuỳ chọn dạng JSON: chuyển kiểu mặc định
+                res, err2 = _soffice_convert(so, src, td, "pdf:draw_pdf_Export")
+            if res is not None:
+                shutil.move(str(res), out)
+                return "LibreOffice"
+            err = err2 or err
+        raise PdfError("LibreOffice không chuyển được file Visio này. " + err)
+    if err:
+        raise PdfError("Microsoft Visio không chuyển được file này. " + err)
+    raise PdfError("Cần Microsoft Visio hoặc LibreOffice (miễn phí) để chuyển file Visio.\n\n"
+                   + ("Chạy lại bộ cài PDF Editor Lite và tích thành phần LibreOffice, hoặc cài LibreOffice "
+                      "từ libreoffice.org." if sys.platform.startswith("win") else
+                      "Cài LibreOffice từ libreoffice.org (hoặc qua trình quản lý gói của máy)."))
+
+
+VISIO_MAX_PIXELS = 250_000_000      # giới hạn số điểm ảnh mỗi trang (~750 MB bộ nhớ) để bản vẽ khổ lớn không làm treo máy
+
+
+def visio_page_dpi(page, dpi: int) -> int:
+    """DPI thực dùng cho trang: hạ xuống nếu trang quá lớn so với VISIO_MAX_PIXELS."""
+    w_in, h_in = page.rect.width / 72, page.rect.height / 72
+    lim = int(math.sqrt(VISIO_MAX_PIXELS / max(w_in * h_in, 1e-6)))
+    return max(36, min(int(dpi), lim))
+
+
+def export_pdf_pages(doc, out_dir: str, base: str, fmt: str, dpi: int = 300, transparent: bool = False,
+                     progress=None) -> tuple[list[str], list[tuple[int, int]]]:
+    """Xuất từng trang PDF ra ảnh chất lượng cao: png (không mất chất lượng), jpg (chất lượng 100) hoặc
+    svg (vector, nét ở mọi cỡ). Trả về (danh sách file, [(số trang, DPI đã phải hạ xuống)])."""
+    outs: list[str] = []
+    lowered: list[tuple[int, int]] = []
+    n = doc.page_count
+    for i in range(n):
+        page = doc[i]
+        name = f"{base}.{fmt}" if n == 1 else f"{base}_trang_{i + 1:03d}.{fmt}"
+        path = os.path.join(out_dir, name)
+        if fmt == "svg":
+            Path(path).write_text(page.get_svg_image(text_as_path=True), encoding="utf-8")
+        else:
+            d = visio_page_dpi(page, dpi)
+            if d < dpi:
+                lowered.append((i + 1, d))
+            pix = page.get_pixmap(dpi=d, alpha=transparent and fmt == "png", annots=True)
+            pix.set_dpi(d, d)
+            if fmt == "jpg":
+                pix.save(path, jpg_quality=100)
+            else:
+                pix.save(path)
+            pix = None
+        outs.append(path)
+        if progress:
+            progress(i + 1, n)
+    return outs, lowered
+
+
+PAPER_PT ={"A4": (595.28, 841.89), "A3": (841.89, 1190.55), "A5": (419.53, 595.28), "Letter": (612, 792),
             "Legal": (612, 1008)}
 
 
@@ -402,6 +530,11 @@ def any_to_pdf_bytes(path: str) -> tuple[bytes, str]:
         with tempfile.TemporaryDirectory() as td:
             out = os.path.join(td, "o.pdf")
             eng = office_to_pdf(path, out)
+            return Path(out).read_bytes(), eng
+    if ext in VISIO_EXT:
+        with tempfile.TemporaryDirectory() as td:
+            out = os.path.join(td, "o.pdf")
+            eng = visio_to_pdf(path, out)
             return Path(out).read_bytes(), eng
     try:
         d = pymupdf.open(path)
