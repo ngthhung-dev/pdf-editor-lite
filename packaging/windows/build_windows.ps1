@@ -90,9 +90,11 @@ Step "3/8  Du lieu ngon ngu Tesseract (vie, eng, osd, chi_sim, chi_tra, jpn, kor
 $tess = Join-Path $vendor "tessdata"
 New-Item -ItemType Directory -Force -Path $tess | Out-Null
 foreach ($l in @("vie", "eng", "osd", "chi_sim", "chi_tra", "jpn", "kor")) {
+    # tieng Viet dung mo hinh chuan (tessdata, ~8 MB): ban fast doc sai dau (Tran thay vi Tran co dau) khi ghep vie+eng
+    $repo = if ($l -eq "vie") { "tessdata" } else { "tessdata_fast" }
     # tai thang tu raw.githubusercontent.com (duong github.com/.../raw/ co luc loi 504), loi thi lay qua CDN jsdelivr
-    try { Get-File "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/$l.traineddata" (Join-Path $tess "$l.traineddata") }
-    catch { Get-File "https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@main/$l.traineddata" (Join-Path $tess "$l.traineddata") }
+    try { Get-File "https://raw.githubusercontent.com/tesseract-ocr/$repo/main/$l.traineddata" (Join-Path $tess "$l.traineddata") }
+    catch { Get-File "https://cdn.jsdelivr.net/gh/tesseract-ocr/$repo@main/$l.traineddata" (Join-Path $tess "$l.traineddata") }
 }
 
 # ---------------------------------------------------------------- 4. Dong goi app
