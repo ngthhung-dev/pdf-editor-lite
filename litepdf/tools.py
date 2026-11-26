@@ -2860,6 +2860,152 @@ def reading_order(words: list) -> list:
     return out
 
 
+def page_rules(page) -> tuple[list, list]:
+    """Các đường kẻ ngang / dọc trên trang (đường kẻ ô bảng, cạnh khung, nét kẻ vẽ bằng hình chữ nhật mảnh).
+    Trả về (ngang [(y, x0, x1)], dọc [(x, y0, y1)])."""
+    hs: list = []
+    vs: list = []
+
+    def seg(x0, y0, x1, y1):
+        if abs(y1 - y0) <= 1.5 and abs(x1 - x0) > 3:
+            hs.append(((y0 + y1) / 2, min(x0, x1), max(x0, x1)))
+        elif abs(x1 - x0) <= 1.5 and abs(y1 - y0) > 3:
+            vs.append(((x0 + x1) / 2, min(y0, y1), max(y0, y1)))
+
+    def box(r):
+        if r.width <= 2.5 or r.height <= 2.5:          # hình chữ nhật mảnh = một nét kẻ
+            if r.width > r.height:
+                seg(r.x0, (r.y0 + r.y1) / 2, r.x1, (r.y0 + r.y1) / 2)
+            else:
+                seg((r.x0 + r.x1) / 2, r.y0, (r.x0 + r.x1) / 2, r.y1)
+            return
+        seg(r.x0, r.y0, r.x1, r.y0)
+        seg(r.x0, r.y1, r.x1, r.y1)
+        seg(r.x0, r.y0, r.x0, r.y1)
+        seg(r.x1, r.y0, r.x1, r.y1)
+    try:
+        for d in page.get_drawings():
+            for it in d.get("items", []):
+                if it[0] == "l":
+                    seg(it[1].x, it[1].y, it[2].x, it[2].y)
+                elif it[0] == "re":
+                    box(pymupdf.Rect(it[1]))
+                elif it[0] == "qu" and it[1].is_rectangular:
+                    box(it[1].rect)
+    except Exception:
+        pass
+    return hs, vs
+
+
+def cell_at(rules, pt, tol: float = 1.0) -> pymupdf.Rect | None:
+    """Ô bảng chứa điểm pt: khung nhỏ nhất có đường kẻ đủ bốn phía (trái, phải, trên, dưới) bao quanh điểm đó."""
+    hs, vs = rules
+    if not hs or not vs:
+        return None
+    l = max((x for x, y0, y1 in vs if x <= pt.x and y0 - tol <= pt.y <= y1 + tol), default=None)
+    r = min((x for x, y0, y1 in vs if x >= pt.x and y0 - tol <= pt.y <= y1 + tol), default=None)
+    t = max((y for y, x0, x1 in hs if y <= pt.y and x0 - tol <= pt.x <= x1 + tol), default=None)
+    b = min((y for y, x0, x1 in hs if y >= pt.y and x0 - tol <= pt.x <= x1 + tol), default=None)
+    if None in (l, r, t, b) or r - l < 4 or b - t < 4:
+        return None
+    return pymupdf.Rect(l, t, r, b)
+
+
+def _same_box(a, b) -> bool:
+    return all(abs(u - v) < 1 for u, v in zip(a, b))
+
+
+def _in_box(w, b) -> bool:
+    cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+    return b.x0 <= cx <= b.x1 and b.y0 <= cy <= b.y1
+
+
+def nearest_word(ws: list, pt) -> int:
+    """Chỉ số từ gần điểm pt nhất (lệch dọc tính nặng gấp 4 lệch ngang)."""
+    best, bd = 0, 1e18
+    for k, w in enumerate(ws):
+        dx = max(w[0] - pt.x, 0, pt.x - w[2])
+        dy = max(w[1] - pt.y, 0, pt.y - w[3])
+        d = dx + 4 * dy
+        if d < bd:
+            best, bd = k, d
+            if d == 0:
+                break
+    return best
+
+
+def _sel_lines(ws: list) -> tuple[list, list[str]]:
+    """Gom các từ đã chọn (theo reading_order) thành khung tô từng dòng và chữ từng dòng."""
+    lines: dict[int, dict[int, list]] = {}
+    for w in ws:
+        lines.setdefault(w[5], {}).setdefault(w[6], []).append(w)
+    rects, texts = [], []
+    for li in sorted(lines):
+        parts = []
+        for sg in sorted(lines[li]):
+            l = lines[li][sg]
+            rects.append(pymupdf.Rect(min(w[0] for w in l), min(w[1] for w in l), max(w[2] for w in l),
+                                      max(w[3] for w in l)))
+            parts.append(" ".join(w[4] for w in l))
+        texts.append("\t".join(parts))      # các ô cách xa trên cùng dòng: ngăn bằng Tab (dán vào Excel đúng cột)
+    return rects, texts
+
+
+def select_words(ordered: list, rules, pa, pb) -> tuple[list, str]:
+    """Quét chọn chữ từ điểm pa tới pb. ordered: các từ theo reading_order. rules: page_rules của trang.
+    - Hai đầu cùng một ô bảng có kẻ: chỉ chọn chữ trong ô đó (ô nhiều dòng không kéo theo chữ các ô cùng hàng).
+    - Hai đầu ở hai ô khác nhau: chọn trọn các ô nằm trong khối từ ô đầu tới ô cuối, chép ra mỗi hàng một dòng,
+      các ô ngăn bằng Tab (dán vào Excel đúng ô).
+    - Còn lại: chọn theo dòng nhìn thấy như cũ.
+    Trả về (khung tô, chữ)."""
+    if not ordered:
+        return [], ""
+    ca = cell_at(rules, pa) if rules else None
+    cb = cell_at(rules, pb) if ca is not None else None
+    if ca is not None and cb is not None:
+        if _same_box(ca, cb):
+            sub = [w for w in ordered if _in_box(w, ca)]
+            if sub:
+                a, b = sorted((nearest_word(sub, pa), nearest_word(sub, pb)))
+                rects, texts = _sel_lines(sub[a:b + 1])
+                return rects, "\n".join(texts)
+        else:
+            region = ca | cb
+            groups: list[list] = []                # [ô, các từ]
+            for w in ordered:
+                if not _in_box(w, region):
+                    continue
+                c = cell_at(rules, pymupdf.Point((w[0] + w[2]) / 2, (w[1] + w[3]) / 2))
+                if c is None or c.x0 < region.x0 - 1 or c.x1 > region.x1 + 1 \
+                        or c.y0 < region.y0 - 1 or c.y1 > region.y1 + 1:
+                    continue
+                for g in groups:
+                    if _same_box(g[0], c):
+                        g[1].append(w)
+                        break
+                else:
+                    groups.append([c, [w]])
+            if groups:
+                rows: list[list] = []              # gom ô thành hàng theo mép trên
+                for c, ws in sorted(groups, key=lambda g: (g[0].y0, g[0].x0)):
+                    if rows and abs(rows[-1][0] - c.y0) < 2:
+                        rows[-1][1].append((c, ws))
+                    else:
+                        rows.append([c.y0, [(c, ws)]])
+                rects, lines = [], []
+                for _y, cs in rows:
+                    parts = []
+                    for c, ws in sorted(cs, key=lambda g: g[0].x0):
+                        rs, texts = _sel_lines(ws)
+                        rects += rs
+                        parts.append(" ".join(t.replace("\t", " ") for t in texts))
+                    lines.append("\t".join(parts))
+                return rects, "\n".join(lines)
+    a, b = sorted((nearest_word(ordered, pa), nearest_word(ordered, pb)))
+    rects, texts = _sel_lines(ordered[a:b + 1])
+    return rects, "\n".join(texts)
+
+
 def looks_like_text_image(page) -> bool:
     """Trang không có chữ thật nhưng nhiều khả năng chứa chữ dạng hình (đáng nhận dạng):
     - bản scan / ảnh chụp: một ảnh phủ từ 50% diện tích trang trở lên;
