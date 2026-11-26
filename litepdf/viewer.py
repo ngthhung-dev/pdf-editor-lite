@@ -409,6 +409,7 @@ class Viewer(QGraphicsView):
         self.ocr_done: set[int] = set()          # trang đã tự nhận dạng chữ (đã thử, có hay không có kết quả)
         self.ocr_found: set[int] = set()         # trong đó: trang có chữ nhận dạng được
         self.imgs: dict[int, list] = {}
+        self.cells: dict[int, tuple] = {}    # đường kẻ ô bảng (quét chọn chữ trong một ô không kéo theo ô bên cạnh)
         self.gfx: dict[int, list] = {}       # hình vẽ bằng nét (mã vạch, mã QR…) chọn được như hình ảnh
         self.sel_anchor = None               # (trang, điểm trên trang) chỗ bắt đầu quét chọn chữ: Shift+bấm để chọn tiếp
         self.notes: dict[int, list] = {}     # ghi chú có nội dung trên từng trang (để hiện khi rê chuột)
@@ -483,6 +484,7 @@ class Viewer(QGraphicsView):
         self.ocr_found.clear()
         self.imgs.clear()
         self.gfx.clear()
+        self.cells.clear()
         self.notes.clear()
         self.dicts.clear()
         self.viewport().update()
@@ -512,6 +514,7 @@ class Viewer(QGraphicsView):
             self.ocr_found.discard(page)
             self.imgs.pop(page, None)
             self.gfx.pop(page, None)
+            self.cells.pop(page, None)
             self.notes.pop(page, None)
             self.dicts.pop(page, None)
             if page < len(self.rects):
@@ -998,17 +1001,10 @@ class Viewer(QGraphicsView):
             self.ocr_found.add(i)
         return bool(ws)
 
-    def _nearest_word(self, ws: list, pt: pymupdf.Point) -> int:
-        best, bd = 0, 1e18
-        for k, w in enumerate(ws):
-            dx = max(w[0] - pt.x, 0, pt.x - w[2])
-            dy = max(w[1] - pt.y, 0, pt.y - w[3])
-            d = dx + 4 * dy
-            if d < bd:
-                best, bd = k, d
-                if d == 0:
-                    break
-        return best
+    def _cells(self, i: int) -> tuple:
+        if i not in self.cells:
+            self.cells[i] = tools.page_rules(self.model.doc[i])
+        return self.cells[i]
 
     def _update_selection(self):
         i = self.press_page
@@ -1020,23 +1016,9 @@ class Viewer(QGraphicsView):
         if cached is None or cached[0] is not ws:      # thứ tự mắt đọc của trang (tính một lần, đổi khi chữ trang đổi)
             cached = (ws, tools.reading_order(ws))
             self._rorder[i] = cached
-        ws = cached[1]
-        a = self._nearest_word(ws, self.to_page(i, self.press))
-        b = self._nearest_word(ws, self.to_page(i, self.cur))
-        a, b = min(a, b), max(a, b)
-        lines: dict[int, dict[int, list]] = {}
-        for w in ws[a:b + 1]:
-            lines.setdefault(w[5], {}).setdefault(w[6], []).append(w)
-        rects, texts = [], []
-        for li in sorted(lines):
-            parts = []
-            for sg in sorted(lines[li]):
-                l = lines[li][sg]
-                rects.append(pymupdf.Rect(min(w[0] for w in l), min(w[1] for w in l), max(w[2] for w in l),
-                                          max(w[3] for w in l)))
-                parts.append(" ".join(w[4] for w in l))
-            texts.append("\t".join(parts))      # các ô cách xa trên cùng dòng: ngăn bằng Tab (dán vào Excel đúng cột)
-        self.sel_page, self.sel_rects, self.sel_text = i, rects, "\n".join(texts)
+        rects, text = tools.select_words(cached[1], self._cells(i), self.to_page(i, self.press),
+                                         self.to_page(i, self.cur))
+        self.sel_page, self.sel_rects, self.sel_text = i, rects, text
 
     # ------------------------------------------------------------ chọn hình ảnh
     def _images(self, i: int) -> list:
